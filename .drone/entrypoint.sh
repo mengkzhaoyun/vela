@@ -32,3 +32,4 @@ exec python3.13 -m vela \
     --target-bitrate "${TARGET_BITRATE:-5M}" \
     --encoder-cq "${ENCODER_CQ:-20}" \
     ${EXTRA_ARGS:-}
+

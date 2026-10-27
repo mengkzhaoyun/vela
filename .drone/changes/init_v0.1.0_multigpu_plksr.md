@@ -12,3 +12,4 @@
 2. **全显存后处理与零磁盘中间帧管道（`vela/models/upscaler.py` & `vela/pipeline/worker.py`）**：
    - 基于 `spandrel` 原生支持 `PLKSRArch`（`4xNomosWebPhoto_RealPLKSR.pth`、`4x-ClearRealityV1.pth`），自动识别 `PLKSRArch` 的 `float32` 精度要求。
    - 在 GPU 显存内直接完成 `Bicubic Antialiased 1920x1080` 下采样与纯 PyTorch 实现的 `FidelityFX CAS` 自适应对比度锐化，随后直接通过管道送入 `hevc_nvenc` / `h264_nvenc`。
+

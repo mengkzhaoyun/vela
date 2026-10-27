@@ -137,3 +137,4 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help()
     return 0
+

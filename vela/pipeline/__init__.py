@@ -4,3 +4,4 @@ from vela.pipeline.probe import SegmentTask, VideoInfo, detect_gpus, plan_segmen
 from vela.pipeline.scheduler import MultiGPUScheduler
 
 __all__ = ["MultiGPUScheduler", "SegmentTask", "VideoInfo", "detect_gpus", "plan_segments", "probe_video"]
+

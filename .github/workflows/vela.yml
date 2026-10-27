@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - release
+  workflow_run:
+    workflows: ["vela-build"]
+    types:
+      - completed
 
 env:
   BUILD_VERSION: "13.0.3"
@@ -13,6 +17,7 @@ env:
 
 jobs:
   vela-runtime:
+    if: ${{ github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -59,3 +64,4 @@ jobs:
 
       - name: Build complete
         run: echo "CUDA ${{ env.BUILD_VERSION }}-vela-${{ env.VELA_VERSION }} pushed successfully to Aliyun!"
+

@@ -6,8 +6,10 @@ dist/
 build/
 .venv/
 .tmp/
+.env
 .vela_work/
 model_weights/*.pth
 model_weights/*.safetensors
 *.mp4
 *.mkv
+

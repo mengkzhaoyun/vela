@@ -123,3 +123,4 @@ class VelaUpscaler:
             .cpu()
         )
         return out_uint8
+

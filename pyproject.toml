@@ -29,3 +29,4 @@ vela = "vela.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["vela*"]
+

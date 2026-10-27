@@ -1,0 +1,40 @@
+# ============================================================
+# Vela Builder 环境镜像 — 预装所有编译与推理依赖 (PyTorch cu130 / Spandrel / TensorRT / FFmpeg)
+# ============================================================
+ARG BASE=nvidia/cuda:13.0.3-devel-ubuntu24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Shanghai
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib/python3.13/site-packages/nvidia/nccl/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+RUN apt-get update && apt-get install -y --allow-change-held-packages --no-install-recommends \
+    ca-certificates curl wget git \
+    build-essential cmake ninja-build \
+    libavformat-dev libavcodec-dev libavutil-dev \
+    libswscale-dev libswresample-dev \
+    libgl1 libglib2.0-0 \
+    ffmpeg mkvtoolnix \
+    && rm -rf /var/lib/apt/lists/*
+
+# 安装预编译 Python 3.13
+RUN curl -fsSL https://github.com/actions/python-versions/releases/download/3.13.2-13708744326/python-3.13.2-linux-24.04-x64.tar.gz | tar -xz -C /usr/local && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/local/bin/python3.13 1 && \
+    update-alternatives --install /usr/bin/python python /usr/local/bin/python3.13 1
+
+RUN curl -fsSL https://bootstrap.pypa.io/get-pip.py | python3.13 && \
+    python3.13 -m pip install --no-cache-dir "setuptools>=70" wheel
+
+WORKDIR /app/vela
+
+# PyTorch + TorchVision (cu130) + Spandrel (PLKSR / ESRGAN / SPAN / HAT 架构加载器)
+RUN pip install --no-cache-dir \
+    torch==2.12.1+cu130 torchvision==0.27.1+cu130 \
+    nvidia-nccl-cu13==2.29.7 \
+    --extra-index-url https://download.pytorch.org/whl/cu130 && \
+    pip install --no-cache-dir \
+    spandrel>=0.4.0 safetensors numpy tqdm Pillow requests huggingface-hub && \
+    echo "/usr/local/lib/python3.13/site-packages/nvidia/nccl/lib" > /etc/ld.so.conf.d/nccl-pip.conf && \
+    echo "/usr/local/lib/python3.13/site-packages/torch/lib" > /etc/ld.so.conf.d/torch.conf && \
+    ldconfig

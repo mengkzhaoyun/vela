@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=70", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vela"
+version = "0.1.0"
+description = "Vela — Multi-GPU Real-World Video Super-Resolution Streaming Engine (RealPLKSR / ClearRealityV1 / NVDEC-NVENC)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Mengsk" }]
+dependencies = [
+    "torch>=2.2.0",
+    "spandrel>=0.4.0",
+    "numpy>=1.24.0",
+    "safetensors>=0.4.0",
+    "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+vela = "vela.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vela*"]

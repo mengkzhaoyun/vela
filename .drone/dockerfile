@@ -1,0 +1,38 @@
+# ============================================================
+# Vela Runtime — 基于 Builder 基础环境的极速精简多 GPU 超分运行镜像
+# ============================================================
+ARG BASE=ghcr.io/mengkzhaoyun/vela:v0.1.0-build
+FROM ${BASE}
+
+ARG AUTHOR
+ARG VERSION
+LABEL maintainer=${AUTHOR} version=${VERSION}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Asia/Shanghai
+ENV PYTHONUNBUFFERED=1
+ENV NVIDIA_DRIVER_CAPABILITIES=all
+ENV SCAN_DIR=/data
+ENV VELA_GPUS=all
+ENV VELA_MODEL=realplksr
+ENV TARGET_WIDTH=1920
+ENV TARGET_HEIGHT=1080
+ENV CODEC=hevc
+ENV ENCODER_CQ=20
+ENV TARGET_BITRATE=5M
+ENV PRESERVE_LOW_BITRATE=true
+ENV BATCH_SIZE=8
+ENV SEGMENT_SECONDS=30.0
+ENV CAS_STRENGTH=0.25
+
+WORKDIR /app/vela
+COPY . /app/vela
+
+RUN pip install --no-cache-dir --no-deps . && \
+    mkdir -p /app/vela/model_weights && \
+    ln -sf /usr/local/bin/vela /usr/local/bin/sglang
+
+COPY .drone/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["entrypoint.sh"]

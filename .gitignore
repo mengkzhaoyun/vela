@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+.tmp/
+.vela_work/
+model_weights/*.pth
+model_weights/*.safetensors
+*.mp4
+*.mkv

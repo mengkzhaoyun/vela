@@ -62,7 +62,10 @@ class VelaConfig:
         for d in DEFAULT_MODEL_SEARCH_DIRS:
             candidate = Path(d) / filename
             if candidate.exists():
-                return candidate
+                return candidate.resolve()
+            st_candidate = Path(d) / f"{Path(filename).stem}.safetensors"
+            if st_candidate.exists():
+                return st_candidate.resolve()
 
         return Path("model_weights") / filename
 

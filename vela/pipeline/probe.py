@@ -119,11 +119,13 @@ def detect_gpus(gpu_spec: str = "all", default_batch: int = 8) -> list[GPUDevice
         props = torch.cuda.get_device_properties(idx)
         vram_gb = props.total_memory / (1024**3)
         cc = (props.major, props.minor)
-        # Scale batch size automatically for 32GB RTX 5090 vs 24GB RTX 4090 / 20GB RX 7900 XT
+        # Scale batch size automatically for BF16 inference on 32GB RTX 5090 vs 24GB RTX 4090 / 20GB RX 7900 XT
         if vram_gb >= 30.0:
-            rec_batch = max(default_batch, 14)
+            rec_batch = max(default_batch, 24)
+        elif vram_gb >= 22.0:
+            rec_batch = max(default_batch, 16)
         elif vram_gb >= 19.0:
-            rec_batch = max(default_batch, 8)
+            rec_batch = max(default_batch, 12)
         else:
             rec_batch = min(default_batch, 4)
 

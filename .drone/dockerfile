@@ -28,7 +28,7 @@ ENV CAS_STRENGTH=0.25
 WORKDIR /app/vela
 COPY . /app/vela
 
-RUN pip install --no-cache-dir --no-deps . && \
+RUN pip install --no-cache-dir --no-deps spandrel einops . && \
     mkdir -p /app/vela/model_weights && \
     ln -sf /usr/local/bin/vela /usr/local/bin/sglang
 

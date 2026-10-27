@@ -5,10 +5,10 @@ from pathlib import Path
 
 import torch
 
-from vela.cli import build_parser
+from vela.cli import VIDEO_EXTENSIONS, build_parser
 from vela.config import VelaConfig
 from vela.models.upscaler import VelaUpscaler, gpu_cas_sharpen, gpu_resize_to_target
-from vela.pipeline.probe import parse_bitrate_to_kbps, plan_segments
+from vela.pipeline.probe import _parse_duration, _parse_fps, parse_bitrate_to_kbps, plan_segments
 
 
 def test_plan_segments_exact_and_remainder(tmp_path: Path) -> None:
@@ -47,6 +47,10 @@ def test_cli_and_bitrate_parser() -> None:
     assert args.model == "realplksr"
     cfg = VelaConfig(model_name="realplksr")
     assert cfg.resolve_model_file().name == "4xNomosWebPhoto_RealPLKSR.pth"
+    for ext in (".mkv", ".mp4", ".avi", ".wmv", ".mov", ".flv", ".webm", ".ts", ".rmvb", ".vob", ".mpg"):
+        assert ext in VIDEO_EXTENSIONS
+    assert abs(_parse_fps("24000/1001") - 23.976) < 0.01
+    assert _parse_duration({"duration": "N/A"}, {"tags": {"DURATION": "01:02:03.500000000"}}) == 3723.5
 
 
 if __name__ == "__main__":

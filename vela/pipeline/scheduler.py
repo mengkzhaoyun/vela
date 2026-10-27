@@ -14,6 +14,9 @@ from vela.pipeline.probe import GPUDeviceSpec, SegmentTask, VideoInfo, detect_gp
 from vela.pipeline.worker import process_segment_stream
 
 
+MP4_COMPATIBLE_AUDIO_CODECS = {"aac", "mp3", "ac3", "eac3", "alac"}
+
+
 def mux_segments_with_audio(segments: list[SegmentTask], src_info: VideoInfo, output_path: Path) -> None:
     """Losslessly concatenate encoded 1080p video segments and remux original audio/chapters."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -24,41 +27,53 @@ def mux_segments_with_audio(segments: list[SegmentTask], src_info: VideoInfo, ou
     tmp_out = output_path.with_suffix(f".muxing{output_path.suffix}")
     tmp_out.unlink(missing_ok=True)
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-v",
-        "error",
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        str(concat_file),
-    ]
-    if src_info.has_audio:
-        cmd.extend(
-            [
-                "-i",
-                str(src_info.path),
-                "-map",
-                "0:v:0",
-                "-map",
-                "1:a?",
-                "-c:v",
-                "copy",
-                "-c:a",
-                "copy",
-            ]
-        )
-    else:
-        cmd.extend(["-map", "0:v:0", "-c:v", "copy"])
+    is_mp4 = output_path.suffix.lower() in (".mp4", ".m4v", ".mov")
+    can_copy_audio = (not is_mp4) or (src_info.audio_codec.lower() in MP4_COMPATIBLE_AUDIO_CODECS)
 
-    if output_path.suffix.lower() == ".mp4":
-        cmd.extend(["-movflags", "+faststart"])
-    cmd.append(str(tmp_out))
+    def _build_mux_cmd(copy_audio: bool) -> list[str]:
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_file),
+        ]
+        if src_info.has_audio:
+            audio_args = ["-c:a", "copy"] if copy_audio else ["-c:a", "aac", "-b:a", "192k"]
+            cmd.extend(
+                [
+                    "-i",
+                    str(src_info.path),
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0?",
+                    "-c:v",
+                    "copy",
+                    *audio_args,
+                ]
+            )
+        else:
+            cmd.extend(["-map", "0:v:0", "-c:v", "copy"])
 
-    subprocess.run(cmd, check=True)
+        if output_path.suffix.lower() == ".mp4":
+            cmd.extend(["-movflags", "+faststart"])
+        cmd.append(str(tmp_out))
+        return cmd
+
+    try:
+        subprocess.run(_build_mux_cmd(copy_audio=can_copy_audio), check=True)
+    except subprocess.CalledProcessError:
+        if src_info.has_audio and can_copy_audio:
+            tmp_out.unlink(missing_ok=True)
+            subprocess.run(_build_mux_cmd(copy_audio=False), check=True)
+        else:
+            raise
     tmp_out.replace(output_path)
 
 

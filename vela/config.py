@@ -12,9 +12,8 @@ MODEL_ALIASES: dict[str, str] = {
 }
 
 DEFAULT_MODEL_SEARCH_DIRS: tuple[str, ...] = (
-    "/data/vela/model_weights",
-    "/app/vela/model_weights",
     "/data/jasna/model_weights",
+    "/app/vela/model_weights",
     "/app/sglang/model_weights",
     "model_weights",
 )

@@ -19,6 +19,7 @@ class VideoInfo:
     bitrate_kbps: int
     codec_name: str
     has_audio: bool
+    audio_codec: str = ""
 
 
 @dataclass
@@ -49,6 +50,40 @@ def parse_bitrate_to_kbps(val: str) -> int:
     return int(float(s))
 
 
+def _parse_fps(rate_str: str | None) -> float:
+    if not rate_str or rate_str == "N/A":
+        return 0.0
+    try:
+        if "/" in rate_str:
+            num, den = rate_str.split("/", 1)
+            d = float(den)
+            return float(num) / d if d > 0 else 0.0
+        return float(rate_str)
+    except (ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _parse_duration(fmt: dict, v_stream: dict) -> float:
+    for val in (fmt.get("duration"), v_stream.get("duration")):
+        if val is not None and str(val) not in ("", "N/A"):
+            try:
+                d = float(val)
+                if d > 0:
+                    return d
+            except ValueError:
+                pass
+    for tags in (v_stream.get("tags") or {}, fmt.get("tags") or {}):
+        for k, v in tags.items():
+            if k.upper().startswith("DURATION") and isinstance(v, str) and ":" in v:
+                try:
+                    parts = v.strip().split(":")
+                    if len(parts) == 3:
+                        return float(parts[0]) * 3600.0 + float(parts[1]) * 60.0 + float(parts[2])
+                except ValueError:
+                    pass
+    return 0.0
+
+
 def probe_video(video_path: Path) -> VideoInfo:
     cmd = [
         "ffprobe",
@@ -65,26 +100,39 @@ def probe_video(video_path: Path) -> VideoInfo:
 
     v_stream = None
     has_audio = False
+    audio_codec = ""
     for st in data.get("streams", []):
         if st.get("codec_type") == "video" and v_stream is None:
             v_stream = st
         elif st.get("codec_type") == "audio":
             has_audio = True
+            if not audio_codec:
+                audio_codec = str(st.get("codec_name", ""))
 
     if v_stream is None:
         raise RuntimeError(f"No video stream found in {video_path}")
 
     width = int(v_stream.get("width", 854))
     height = int(v_stream.get("height", 480))
-    fps_str = str(v_stream.get("r_frame_rate") or v_stream.get("avg_frame_rate") or "30/1")
-    if "/" in fps_str:
-        num, den = fps_str.split("/", 1)
-        fps = float(num) / max(float(den), 1.0)
+    avg_rate_str = str(v_stream.get("avg_frame_rate") or "")
+    r_rate_str = str(v_stream.get("r_frame_rate") or "")
+    avg_fps = _parse_fps(avg_rate_str)
+    r_fps = _parse_fps(r_rate_str)
+    if 1.0 <= avg_fps <= 120.0 and (r_fps <= 0.0 or r_fps > 120.0 or abs(r_fps - avg_fps) > 5.0):
+        fps = avg_fps
+        fps_str = avg_rate_str
+    elif 1.0 <= r_fps <= 120.0:
+        fps = r_fps
+        fps_str = r_rate_str
+    elif avg_fps > 0.0:
+        fps = min(avg_fps, 120.0)
+        fps_str = avg_rate_str
     else:
-        fps = float(fps_str)
+        fps = 30.0
+        fps_str = "30/1"
 
     fmt = data.get("format", {})
-    duration = float(fmt.get("duration") or v_stream.get("duration") or 0.0)
+    duration = _parse_duration(fmt, v_stream)
     raw_br = v_stream.get("bit_rate") or fmt.get("bit_rate") or 0
     bitrate_kbps = int(raw_br) // 1000 if str(raw_br).isdigit() else 2500
     codec_name = str(v_stream.get("codec_name", "h264"))
@@ -99,6 +147,7 @@ def probe_video(video_path: Path) -> VideoInfo:
         bitrate_kbps=bitrate_kbps,
         codec_name=codec_name,
         has_audio=has_audio,
+        audio_codec=audio_codec,
     )
 
 

@@ -10,9 +10,10 @@ set -e
 #   vela info                           # 查看多卡探测与 NVENC 状态
 # ============================================================
 
-if [ -d "/app/vela/model_weights" ] && [ ! -e "/data/vela/model_weights" ]; then
-    mkdir -p /data/vela
-    ln -sfn /app/vela/model_weights /data/vela/model_weights
+if [ -d "/data/jasna/model_weights" ] && [ -d "/app/vela/model_weights" ] && [ ! -L "/app/vela/model_weights" ]; then
+    if [ -z "$(ls -A /app/vela/model_weights 2>/dev/null)" ]; then
+        rmdir /app/vela/model_weights 2>/dev/null && ln -sfn /data/jasna/model_weights /app/vela/model_weights || true
+    fi
 fi
 
 if [ "$#" -gt 0 ]; then

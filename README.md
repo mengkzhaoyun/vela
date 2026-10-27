@@ -38,12 +38,13 @@ vela info
 ### 2. Docker Deployment (RTX 4090 / RTX 5090 Multi-GPU)
 
 ```bash
+docker pull registry.cn-qingdao.aliyuncs.com/wod/cuda:13.0.3-vela-v0.1.0 && \
 docker rm -f vela || true && \
 docker run --name vela \
-  -it --rm \
+  -d --rm \
   --gpus all \
-  -v /nas/sglang/model_weights:/app/vela/model_weights \
-  -v /nas/sglang/ai:/data \
+  -v /data/jasna/model_weights:/app/vela/model_weights \
+  -v /data/jasna/ais:/data \
   registry.cn-qingdao.aliyuncs.com/wod/cuda:13.0.3-vela-v0.1.0
 ```
 

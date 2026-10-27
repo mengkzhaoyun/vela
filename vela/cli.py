@@ -11,7 +11,27 @@ from vela.pipeline.probe import detect_gpus, probe_video
 from vela.pipeline.scheduler import MultiGPUScheduler
 from vela.pipeline.worker import has_ffmpeg_encoder
 
-VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".ts"}
+VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".mov",
+    ".wmv",
+    ".flv",
+    ".webm",
+    ".ts",
+    ".m2ts",
+    ".mts",
+    ".m4v",
+    ".mpg",
+    ".mpeg",
+    ".rmvb",
+    ".rm",
+    ".vob",
+    ".asf",
+    ".3gp",
+    ".f4v",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -73,7 +93,9 @@ def run_batch_scan(scheduler: MultiGPUScheduler, scan_dir: Path, cfg: VelaConfig
         for p in scan_dir.rglob("*")
         if p.is_file()
         and p.suffix.lower() in VIDEO_EXTENSIONS
-        and not p.stem.endswith("_1080p")
+        and not p.stem.lower().endswith("_1080p")
+        and not p.stem.endswith(".muxing")
+        and not p.stem.endswith(".part")
         and ".vela_work" not in p.parts
     )
     print(f"[VELA-SCAN] Found {len(candidates)} candidate video files in {scan_dir}")
@@ -83,12 +105,15 @@ def run_batch_scan(scheduler: MultiGPUScheduler, scan_dir: Path, cfg: VelaConfig
         if out_vid.exists():
             print(f"[SKIP] Output already exists: {out_vid.name}")
             continue
-        info = probe_video(vid)
-        if info.height >= cfg.target_height:
-            print(f"[SKIP] {vid.name} is already {info.width}x{info.height} (>= {cfg.target_height}p)")
-            continue
-        scheduler.process_video(vid, out_vid)
-        processed += 1
+        try:
+            info = probe_video(vid)
+            if info.height >= cfg.target_height:
+                print(f"[SKIP] {vid.name} is already {info.width}x{info.height} (>= {cfg.target_height}p)")
+                continue
+            scheduler.process_video(vid, out_vid)
+            processed += 1
+        except Exception as exc:
+            print(f"[ERROR] Failed to process {vid.name}: {exc}")
 
     print(f"[VELA-SCAN] Completed batch scan. Upscaled {processed} video(s).")
     return 0

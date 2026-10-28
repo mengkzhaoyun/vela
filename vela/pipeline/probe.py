@@ -20,6 +20,14 @@ class VideoInfo:
     codec_name: str
     has_audio: bool
     audio_codec: str = ""
+    # Observed metadata for logs; never substitute encoder-policy defaults here.
+    video_bitrate_bps: int | None = None
+    container_bitrate_bps: int | None = None
+    video_bitrate_source: str = "未记录"
+    container_bitrate_source: str = "未记录"
+    measured_fps: float | None = None
+    measured_width: int | None = None
+    measured_height: int | None = None
 
 
 @dataclass
@@ -84,6 +92,33 @@ def _parse_duration(fmt: dict, v_stream: dict) -> float:
     return 0.0
 
 
+def _positive_metadata_int(value: object) -> int | None:
+    """Read an observed positive integer without treating invalid values as zero."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(number) or number <= 0:
+        return None
+    parsed = int(number)
+    return parsed if parsed > 0 else None
+
+
+def _video_bitrate_metadata(v_stream: dict) -> tuple[int | None, str]:
+    tags = v_stream.get("tags") or {}
+    for value, source in (
+        (v_stream.get("bit_rate"), "视频流bit_rate"),
+        (tags.get("BPS"), "视频流标签BPS"),
+        (tags.get("BPS-eng"), "视频流标签BPS-eng"),
+    ):
+        bitrate = _positive_metadata_int(value)
+        if bitrate is not None:
+            return bitrate, source
+    return None, "无法获取"
+
+
 def probe_video(video_path: Path) -> VideoInfo:
     cmd = [
         "ffprobe",
@@ -136,6 +171,14 @@ def probe_video(video_path: Path) -> VideoInfo:
     raw_br = v_stream.get("bit_rate") or fmt.get("bit_rate") or 0
     bitrate_kbps = int(raw_br) // 1000 if str(raw_br).isdigit() else 2500
     codec_name = str(v_stream.get("codec_name", "h264"))
+    video_bitrate_bps, video_bitrate_source = _video_bitrate_metadata(v_stream)
+    container_bitrate_bps = _positive_metadata_int(fmt.get("bit_rate"))
+    # avg_frame_rate describes the observed average. Keep it separate from the
+    # processing FPS selection above, which may choose r_frame_rate or a cap.
+    measured_fps = next(
+        (rate for rate in (avg_fps, r_fps) if math.isfinite(rate) and rate > 0),
+        None,
+    )
 
     return VideoInfo(
         path=video_path,
@@ -148,6 +191,13 @@ def probe_video(video_path: Path) -> VideoInfo:
         codec_name=codec_name,
         has_audio=has_audio,
         audio_codec=audio_codec,
+        video_bitrate_bps=video_bitrate_bps,
+        container_bitrate_bps=container_bitrate_bps,
+        video_bitrate_source=video_bitrate_source,
+        container_bitrate_source="容器bit_rate" if container_bitrate_bps is not None else "无法获取",
+        measured_fps=measured_fps,
+        measured_width=_positive_metadata_int(v_stream.get("width")),
+        measured_height=_positive_metadata_int(v_stream.get("height")),
     )
 
 

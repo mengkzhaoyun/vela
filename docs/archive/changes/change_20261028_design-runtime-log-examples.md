@@ -4,21 +4,21 @@
 - **助手**：Codex（日志设计与源码核对）
 - **审阅人**：Mengsk
 - **日期**：2026-10-28
-- **状态**：样例已编制，待 Mengsk 审核
+- **状态**：已完成，Mengsk 已批准格式
 - **所属任务**：T9
 
 ## 1. 当前依据
 
-- [研究计划](../plan/2026.10.restoration-order.plan.md)：预期日志设计与人工审核检查点。
-- [运行日志说明](../runtime-log-review.md)：待审核的输出位置、字段与完整示例。
-- [Vela 调度日志](../../vela/pipeline/scheduler.py)：输入、分段进度、封装与完成记录。
-- [Vela 批量入口](../../vela/cli.py)：候选排序、串行调度、失败继续、跳过及批次退出码。
-- [Jasna 阶段日志](../../../jasna/jasna/ltx/restore.py)：scan、encode、denoise、compose 四阶段及进度单位。
-- [Jasna 输入探测](../../../jasna/jasna/media/probe.py)：视频流、标签和容器码率的回退顺序。
-- [Jasna 编码参数](../../../jasna/jasna/media/video_encoder.py)：输入码率关联上限与显式覆盖。
-- [Vela 输入探测](../../vela/pipeline/probe.py)：码率来源、零值与回退值。
-- [Vela 配置](../../vela/config.py)：目标码率及低码率保护默认值。
-- [Vela 编码参数](../../vela/pipeline/worker.py)：目标码率与实际编码参数的差异。
+- [研究计划](../../plan/2026.10.restoration-order.plan.md)：预期日志设计与人工审核检查点。
+- [运行日志说明](../../runtime-log-review.md)：待审核的输出位置、字段与完整示例。
+- [Vela 调度日志](../../../vela/pipeline/scheduler.py)：输入、分段进度、封装与完成记录。
+- [Vela 批量入口](../../../vela/cli.py)：候选排序、串行调度、失败继续、跳过及批次退出码。
+- [Jasna 阶段日志](../../../../jasna/jasna/ltx/restore.py)：scan、encode、denoise、compose 四阶段及进度单位。
+- [Jasna 输入探测](../../../../jasna/jasna/media/probe.py)：视频流、标签和容器码率的回退顺序。
+- [Jasna 编码参数](../../../../jasna/jasna/media/video_encoder.py)：输入码率关联上限与显式覆盖。
+- [Vela 输入探测](../../../vela/pipeline/probe.py)：码率来源、零值与回退值。
+- [Vela 配置](../../../vela/config.py)：目标码率及低码率保护默认值。
+- [Vela 编码参数](../../../vela/pipeline/worker.py)：目标码率与实际编码参数的差异。
 
 ## 2. 执行范围
 
@@ -40,4 +40,4 @@
 
 ## 4. 审核记录
 
-- Mengsk 尚未审核。本任务在真实审核前保持未完成，不归档。
+- 2026-10-28：Mengsk 明确批准本日志格式，并要求实施 Vela 日志；设计任务完成，实施由 T10 单独记录。

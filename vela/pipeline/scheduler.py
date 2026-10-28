@@ -11,7 +11,7 @@ from pathlib import Path
 from vela.config import VelaConfig
 from vela.models.upscaler import VelaUpscaler
 from vela.pipeline.probe import GPUDeviceSpec, SegmentTask, VideoInfo, detect_gpus, plan_segments, probe_video
-from vela.pipeline.worker import process_segment_stream
+from vela.pipeline.worker import process_segment_stream, resolve_effective_fps
 
 
 MP4_COMPATIBLE_AUDIO_CODECS = {"aac", "mp3", "ac3", "eac3", "alac"}
@@ -112,7 +112,14 @@ def _gpu_worker_process(
 
             seg_t0 = time.time()
             n_f = process_segment_stream(
-                seg_task, info, cfg, upscaler, gpu_id=gid, batch_size=b_size, gpu_name=gname
+                seg_task,
+                info,
+                cfg,
+                upscaler,
+                gpu_id=gid,
+                batch_size=b_size,
+                gpu_name=gname,
+                total_segments=total_segments,
             )
             seg_dt = time.time() - seg_t0
             if n_f > 0:
@@ -151,7 +158,9 @@ class MultiGPUScheduler:
             if self.gpu_specs
             else "CPU Fallback (0 CUDA GPUs detected)"
         )
-        print(f"[VELA] Input: {input_video.name} ({info.width}x{info.height} @ {info.fps:.2f}fps, {info.duration:.1f}s)")
+        out_fps, fps_capped = resolve_effective_fps(info, self.cfg)
+        fps_label = f"{info.fps:.2f}fps -> {out_fps:.2f}fps" if fps_capped else f"{info.fps:.2f}fps"
+        print(f"[VELA] Input: {input_video.name} ({info.width}x{info.height} @ {fps_label}, {info.duration:.1f}s)")
         print(f"[VELA] Target: {self.cfg.target_width}x{self.cfg.target_height} | Model: {model_file.name} | Segments: {len(segments)}")
         print(f"[VELA] Workers: {gpu_summary}", flush=True)
 
@@ -189,6 +198,15 @@ class MultiGPUScheduler:
                     break
                 total_frames += int(n_f)
                 completed_count += 1
+                elapsed_now = max(time.time() - t0, 1e-3)
+                pct = completed_count * 100.0 / len(segments)
+                eta_min = ((len(segments) - completed_count) * (elapsed_now / completed_count)) / 60.0
+                print(
+                    f"[VELA] Progress: {completed_count}/{len(segments)} ({pct:.1f}%) | "
+                    f"Frames: {total_frames} | Avg Speed: {total_frames / elapsed_now:.1f} fps | "
+                    f"Elapsed: {elapsed_now / 60.0:.1f}m | ETA: {eta_min:.1f}m",
+                    flush=True,
+                )
             except queue.Empty:
                 continue
 

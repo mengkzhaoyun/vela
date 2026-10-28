@@ -30,6 +30,7 @@ class VelaConfig:
     target_width: int = field(default_factory=lambda: int(os.environ.get("TARGET_WIDTH", "1920")))
     target_height: int = field(default_factory=lambda: int(os.environ.get("TARGET_HEIGHT", "1080")))
     target_fps: float = field(default_factory=lambda: float(os.environ.get("TARGET_FPS", "0")))
+    max_fps: float = field(default_factory=lambda: float(os.environ.get("MAX_FPS", "30")))
     batch_size: int = field(default_factory=lambda: int(os.environ.get("BATCH_SIZE", "8")))
     segment_seconds: float = field(default_factory=lambda: float(os.environ.get("SEGMENT_SECONDS", "30.0")))
     pre_denoise: str = field(default_factory=lambda: os.environ.get("PRE_DENOISE", "hqdn3d=1.5:1.2:2.5:2.0"))
@@ -38,7 +39,7 @@ class VelaConfig:
     target_bitrate: str = field(default_factory=lambda: os.environ.get("TARGET_BITRATE", "5M"))
     encoder_cq: int = field(default_factory=lambda: int(os.environ.get("ENCODER_CQ", "20")))
     preserve_low_bitrate: bool = field(
-        default_factory=lambda: os.environ.get("PRESERVE_LOW_BITRATE", "true").lower() in ("1", "true", "yes")
+        default_factory=lambda: os.environ.get("PRESERVE_LOW_BITRATE", "false").lower() in ("1", "true", "yes")
     )
     compile_model: bool = field(
         default_factory=lambda: os.environ.get("COMPILE_MODEL", "false").lower() in ("1", "true", "yes")

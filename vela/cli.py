@@ -54,7 +54,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpus", default="all", help="GPU IDs to use: 'all' or comma-separated list like '0,1'")
     parser.add_argument("--target-width", type=int, default=1920, help="Target output width (default: 1920)")
     parser.add_argument("--target-height", type=int, default=1080, help="Target output height (default: 1080)")
-    parser.add_argument("--fps", type=float, default=0.0, help="Target FPS (0 = preserve source FPS)")
+    parser.add_argument("--fps", type=float, default=0.0, help="Target FPS (0 = auto cap at --max-fps)")
+    parser.add_argument("--max-fps", type=float, default=30.0, help="Max output FPS cap for high-FPS sources (default: 30.0, 0=unlimited)")
     parser.add_argument("--batch-size", type=int, default=8, help="Frames per batch per GPU (default: 8)")
     parser.add_argument("--segment-seconds", type=float, default=30.0, help="GOP segment length in seconds for multi-GPU queue")
     parser.add_argument("--pre-denoise", default="hqdn3d=1.5:1.2:2.5:2.0", help="FFmpeg pre-deblocking filter before SR")
@@ -134,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
         target_width=args.target_width,
         target_height=args.target_height,
         target_fps=args.fps,
+        max_fps=args.max_fps,
         batch_size=args.batch_size,
         segment_seconds=args.segment_seconds,
         pre_denoise=args.pre_denoise,

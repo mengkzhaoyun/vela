@@ -26,6 +26,7 @@ exec python3.13 -m vela \
     --model "${VELA_MODEL:-realplksr}" \
     --target-width "${TARGET_WIDTH:-1920}" \
     --target-height "${TARGET_HEIGHT:-1080}" \
+    --max-fps "${MAX_FPS:-30}" \
     --batch-size "${BATCH_SIZE:-8}" \
     --segment-seconds "${SEGMENT_SECONDS:-30.0}" \
     --cas-strength "${CAS_STRENGTH:-0.25}" \

@@ -1,0 +1,287 @@
+{
+  "experiment": "fixed_canvas_resampling_loss",
+  "run_date": "2026-10-28",
+  "canvas_side": 512,
+  "synthetic_only": true,
+  "neural_model_inference": false,
+  "remote_gpu_used": false,
+  "methods": {
+    "direct": "512 canvas -> target ROI; AREA when shrinking, bicubic when enlarging",
+    "via_source": "512 canvas -> source ROI using AREA -> target ROI using bicubic",
+    "quantization": "round and clip to uint8 after each mapping",
+    "frequency_metric": "least-squares sine/cosine amplitude at known frequency, excluding 5 percent edges",
+    "chart_error_reference": "direct target mapping of the same synthetic 512 canvas"
+  },
+  "environment": {
+    "python": "3.12.10",
+    "numpy": "1.26.4",
+    "opencv": "4.10.0",
+    "pillow": "12.1.1",
+    "device": "CPU"
+  },
+  "limitations": [
+    "The same hypothetical restored canvas is reused in both paths; changed model conditioning and crops are not represented.",
+    "Bicubic is not RealPLKSR; no neural restoration or super-resolution weights are used.",
+    "OpenCV CPU interpolation is not byte-exact to a GPU implementation.",
+    "The diagnostic does not measure detection accuracy, temporal consistency, encoding loss, latency, or VRAM.",
+    "These results cannot determine the best end-to-end model order for a real video."
+  ],
+  "cases": [
+    {
+      "source_roi_side": 96,
+      "target_roi_side": 216,
+      "target_scale": 2.25,
+      "chart_difference_vs_direct_mapping": {
+        "rmse_u8": 43.71074615653504,
+        "psnr_db": 15.319039206682916
+      },
+      "frequency_response": [
+        {
+          "cycles_per_canvas_width": 8,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 99.91035540822351,
+          "via_source_amplitude": 99.57087221585876,
+          "amplitude_ratio_vs_direct": 0.9966021220625464
+        },
+        {
+          "cycles_per_canvas_width": 24,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 97.88673836793215,
+          "via_source_amplitude": 88.5119176953347,
+          "amplitude_ratio_vs_direct": 0.9042278777605215
+        },
+        {
+          "cycles_per_canvas_width": 48,
+          "below_source_nyquist": false,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 90.91699104611398,
+          "via_source_amplitude": 62.19992838205209,
+          "amplitude_ratio_vs_direct": 0.6841397594263067
+        },
+        {
+          "cycles_per_canvas_width": 64,
+          "below_source_nyquist": false,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 84.21184952819772,
+          "via_source_amplitude": 4.553953075666019,
+          "amplitude_ratio_vs_direct": 0.054077343048274475
+        },
+        {
+          "cycles_per_canvas_width": 96,
+          "below_source_nyquist": false,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 67.15919022844867,
+          "via_source_amplitude": 0.03404181518719729,
+          "amplitude_ratio_vs_direct": 0.0005068824545293156
+        }
+      ]
+    },
+    {
+      "source_roi_side": 160,
+      "target_roi_side": 360,
+      "target_scale": 2.25,
+      "chart_difference_vs_direct_mapping": {
+        "rmse_u8": 23.29474255844433,
+        "psnr_db": 20.785645304464445
+      },
+      "frequency_response": [
+        {
+          "cycles_per_canvas_width": 8,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 99.90764666702563,
+          "via_source_amplitude": 100.1001887374202,
+          "amplitude_ratio_vs_direct": 1.0019272005378754
+        },
+        {
+          "cycles_per_canvas_width": 24,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 98.99840661948679,
+          "via_source_amplitude": 97.26088967259723,
+          "amplitude_ratio_vs_direct": 0.982449041290453
+        },
+        {
+          "cycles_per_canvas_width": 48,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 96.02254822114787,
+          "via_source_amplitude": 80.08884818332814,
+          "amplitude_ratio_vs_direct": 0.8340629327902952
+        },
+        {
+          "cycles_per_canvas_width": 64,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 92.6170117198926,
+          "via_source_amplitude": 56.74751542541268,
+          "amplitude_ratio_vs_direct": 0.6127115782685553
+        },
+        {
+          "cycles_per_canvas_width": 96,
+          "below_source_nyquist": false,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 84.20323842325757,
+          "via_source_amplitude": 12.188050867773287,
+          "amplitude_ratio_vs_direct": 0.14474563088071032
+        }
+      ]
+    },
+    {
+      "source_roi_side": 224,
+      "target_roi_side": 504,
+      "target_scale": 2.25,
+      "chart_difference_vs_direct_mapping": {
+        "rmse_u8": 10.890563409584505,
+        "psnr_db": 27.389796648376752
+      },
+      "frequency_response": [
+        {
+          "cycles_per_canvas_width": 8,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 100.03251468682443,
+          "via_source_amplitude": 99.73737213062117,
+          "amplitude_ratio_vs_direct": 0.997049533772821
+        },
+        {
+          "cycles_per_canvas_width": 24,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 99.27412133837487,
+          "via_source_amplitude": 98.77015894699211,
+          "amplitude_ratio_vs_direct": 0.9949235270522818
+        },
+        {
+          "cycles_per_canvas_width": 48,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 97.22940940511118,
+          "via_source_amplitude": 92.34065784666457,
+          "amplitude_ratio_vs_direct": 0.949719415263777
+        },
+        {
+          "cycles_per_canvas_width": 64,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 94.96640557850829,
+          "via_source_amplitude": 81.5306750030868,
+          "amplitude_ratio_vs_direct": 0.8585212266003452
+        },
+        {
+          "cycles_per_canvas_width": 96,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 88.95688338598656,
+          "via_source_amplitude": 47.27785078463163,
+          "amplitude_ratio_vs_direct": 0.5314692802297449
+        }
+      ]
+    },
+    {
+      "source_roi_side": 320,
+      "target_roi_side": 720,
+      "target_scale": 2.25,
+      "chart_difference_vs_direct_mapping": {
+        "rmse_u8": 6.99175178180655,
+        "psnr_db": 31.23908357343258
+      },
+      "frequency_response": [
+        {
+          "cycles_per_canvas_width": 8,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 100.14586242965485,
+          "via_source_amplitude": 100.06274287451457,
+          "amplitude_ratio_vs_direct": 0.9991700150847603
+        },
+        {
+          "cycles_per_canvas_width": 24,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 100.41620601486356,
+          "via_source_amplitude": 99.46349611122301,
+          "amplitude_ratio_vs_direct": 0.9905123889713625
+        },
+        {
+          "cycles_per_canvas_width": 48,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 101.0429399326585,
+          "via_source_amplitude": 96.46924926953729,
+          "amplitude_ratio_vs_direct": 0.9547351782700562
+        },
+        {
+          "cycles_per_canvas_width": 64,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 101.5392752464559,
+          "via_source_amplitude": 93.4326683857168,
+          "amplitude_ratio_vs_direct": 0.9201628449576504
+        },
+        {
+          "cycles_per_canvas_width": 96,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 101.75872364086271,
+          "via_source_amplitude": 80.6871784820525,
+          "amplitude_ratio_vs_direct": 0.7929264007557911
+        }
+      ]
+    },
+    {
+      "source_roi_side": 480,
+      "target_roi_side": 1080,
+      "target_scale": 2.25,
+      "chart_difference_vs_direct_mapping": {
+        "rmse_u8": 4.123894144489161,
+        "psnr_db": 35.824653430155934
+      },
+      "frequency_response": [
+        {
+          "cycles_per_canvas_width": 8,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 100.03139619541122,
+          "via_source_amplitude": 99.86803065891559,
+          "amplitude_ratio_vs_direct": 0.9983668573796921
+        },
+        {
+          "cycles_per_canvas_width": 24,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 100.25900579350326,
+          "via_source_amplitude": 99.63157225449608,
+          "amplitude_ratio_vs_direct": 0.9937418735200759
+        },
+        {
+          "cycles_per_canvas_width": 48,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 101.0584673655819,
+          "via_source_amplitude": 98.37175215357517,
+          "amplitude_ratio_vs_direct": 0.9734142493742017
+        },
+        {
+          "cycles_per_canvas_width": 64,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 101.57635755274757,
+          "via_source_amplitude": 96.27464096296403,
+          "amplitude_ratio_vs_direct": 0.9478056043993268
+        },
+        {
+          "cycles_per_canvas_width": 96,
+          "below_source_nyquist": true,
+          "below_target_nyquist": true,
+          "direct_target_amplitude": 101.6761542554444,
+          "via_source_amplitude": 89.57784916996468,
+          "amplitude_ratio_vs_direct": 0.8810113819304697
+        }
+      ]
+    }
+  ],
+  "script_sha256": "d5fccf610e54075f74882b1fe8862bbad7e9c307a0403178f1dd7d0ff7e919dc"
+}

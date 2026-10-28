@@ -36,7 +36,8 @@ def fake_spawn_worker(spec, cfg, info, model_file, total, tasks, results, logs, 
                 logs.put("Traceback: deliberate worker error")
                 results.put(("err", None, 0, "deliberate worker error"))
                 break
-            results.put(("ok", task.idx, 150, None))
+            n_frames = 0 if cfg.model_name == "resume" and task.idx == 0 else 150
+            results.put(("ok", task.idx, n_frames, None))
         # Specifically verify that output written after the result is not lost.
         logs.put("last worker line")
     finally:
@@ -133,6 +134,36 @@ class SchedulerLoggingTests(unittest.TestCase):
                     engine.process_video(root / "input.mp4", root / "out.mp4", input_info=self.info(root / "input.mp4"))
             mux.assert_not_called()
             self.assertFalse(any("Done!" in line for line in lines))
+
+    def test_resumed_segments_advance_progress_without_shortening_fresh_work_eta(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            engine = self.make_scheduler("resume")
+            info = self.info(root / "input.mp4")
+            info.duration = 15  # Three segments: cached, fresh, fresh.
+            ticks = iter([0.0])
+            clock = types.SimpleNamespace(monotonic=lambda: next(ticks, 120.0))
+            lines = []
+            with patch.object(scheduler, "_gpu_worker_process", fake_spawn_worker), \
+                 patch.object(scheduler, "mux_segments_with_audio") as mux, \
+                 patch.object(scheduler, "time", clock), capture_output(lines.append):
+                result = engine.process_video(root / "input.mp4", root / "out.mp4", input_info=info)
+            progress = [line for line in lines if "[VELA] Progress:" in line]
+            self.assertEqual(len(progress), 3)
+            self.assertIn("Progress: 1/3", progress[0])
+            self.assertIn("Resumed: 1 | Frames: 0", progress[0])
+            self.assertIn("ETA: pending", progress[0])
+            self.assertIn("Progress: 2/3", progress[1])
+            self.assertIn("Resumed: 1 | Frames: 150", progress[1])
+            # 120 seconds for one fresh segment with one left, not 60 seconds
+            # obtained by incorrectly treating the cached segment as work.
+            self.assertIn("ETA: 2.0m", progress[1])
+            self.assertIn("Avg Speed: 1.2 fps", progress[1])
+            self.assertIn("Progress: 3/3", progress[2])
+            self.assertIn("Resumed: 1 | Frames: 300", progress[2])
+            self.assertIn("ETA: 0.0m", progress[2])
+            self.assertEqual(result["frames"], 300)
+            self.assertEqual(mux.call_count, 1)
 
     def test_reported_error_keeps_worker_logs_and_does_not_mux(self):
         with tempfile.TemporaryDirectory() as td:

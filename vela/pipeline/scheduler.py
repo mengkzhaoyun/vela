@@ -329,6 +329,7 @@ class MultiGPUScheduler:
         )
         procs: list[mp.Process] = []
         completed: set[int] = set()
+        newly_processed_segments = 0
         total_frames = 0
         successful = False
         try:
@@ -364,13 +365,23 @@ class MultiGPUScheduler:
                     raise RuntimeError(f"Invalid or duplicate Vela segment result: {seg_idx}")
                 completed.add(seg_idx)
                 total_frames += int(n_f)
+                if int(n_f) > 0:
+                    newly_processed_segments += 1
                 elapsed_now = max(time.monotonic() - t0, 1e-3)
                 pct = len(completed) * 100.0 / len(segments)
-                eta_min = ((len(segments) - len(completed)) * elapsed_now / len(completed)) / 60.0
+                remaining = len(segments) - len(completed)
+                # Cached segments advance completion but provide no throughput
+                # sample for this run. Wait for fresh work before estimating.
+                eta = (
+                    "0.0m" if remaining == 0 else
+                    f"{remaining * elapsed_now / newly_processed_segments / 60.0:.1f}m"
+                    if newly_processed_segments else "pending"
+                )
                 print(
                     f"[VELA] Progress: {len(completed)}/{len(segments)} ({pct:.1f}%) | "
+                    f"Resumed: {len(completed) - newly_processed_segments} | "
                     f"Frames: {total_frames} | Avg Speed: {total_frames / elapsed_now:.1f} fps | "
-                    f"Elapsed: {elapsed_now / 60.0:.1f}m | ETA: {eta_min:.1f}m", flush=True,
+                    f"Elapsed: {elapsed_now / 60.0:.1f}m | ETA: {eta}", flush=True,
                 )
                 if len(completed) == len(segments):
                     finished_at = time.monotonic()

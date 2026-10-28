@@ -48,4 +48,4 @@ docker run --name vela \
   registry.cn-qingdao.aliyuncs.com/wod/cuda:13.0.3-vela-v0.1.0
 ```
 
-See [`docs/technical-whitepaper.md`](docs/technical-whitepaper.md) for the complete VSR taxonomy and engine architecture, and [`.drone/README.md`](.drone/README.md) for full production deployment, offline model download, and CI/CD instructions.
+See [`docs/technical-whitepaper.md`](docs/technical-whitepaper.md) for the complete VSR taxonomy and engine architecture, [`docs/FAQ.md`](docs/FAQ.md) for close-up restoration and T1/T2 hybrid strategies, and [`.drone/README.md`](.drone/README.md) for full production deployment, offline model download, and CI/CD instructions.

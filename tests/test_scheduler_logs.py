@@ -243,6 +243,41 @@ class SchedulerLoggingTests(unittest.TestCase):
         self.assertTrue(any("[CPU]" in line and "CUDA统计=不适用" in line for line in lines))
         scheduler._resource_warnings.clear()
 
+    def test_resource_query_normalizes_cuda_uuid_and_preserves_device_mapping(self):
+        bare = "01234567-89ab-cdef-0123-456789abcdef"
+
+        class CUuuid:
+            def __str__(self):
+                return bare
+
+        cases = (
+            (CUuuid(), "7,6", f"GPU-{bare}"),
+            (bare.encode(), "7,6", f"GPU-{bare}"),
+            (f"GPU-{bare}", "7,6", f"GPU-{bare}"),
+            (f"MIG-GPU-{bare}/1/0", "7,6", f"MIG-GPU-{bare}/1/0"),
+            (None, "5,2", "2"),
+            (None, f"5,GPU-{bare}", f"GPU-{bare}"),
+            (None, f"5,{bare}", f"GPU-{bare}"),
+            (None, "", "1"),
+            ("not-a-uuid", "7,6", "not-a-uuid"),
+        )
+        response = subprocess.CompletedProcess([], 0, "75, 1024, 24564, 60, 145.5\n", "")
+        for uuid, visible, expected in cases:
+            with self.subTest(uuid=str(uuid), visible=visible):
+                cuda = types.SimpleNamespace(
+                    memory_allocated=lambda _: 0,
+                    memory_reserved=lambda _: 0,
+                    max_memory_allocated=lambda _: 0,
+                    get_device_properties=lambda _: types.SimpleNamespace(uuid=uuid),
+                )
+                lines = []
+                with patch.dict(os.environ, {"CUDA_VISIBLE_DEVICES": visible}), \
+                     patch.object(scheduler.subprocess, "run", return_value=response) as query, \
+                     capture_output(lines.append):
+                    scheduler._report_worker_resources(types.SimpleNamespace(cuda=cuda), 1, "初始化完成")
+                self.assertEqual(query.call_args.args[0][2], expected)
+                self.assertTrue(any("GPU利用率快照=75%" in line for line in lines))
+
     def test_active_worker_count_is_limited_by_available_segments(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

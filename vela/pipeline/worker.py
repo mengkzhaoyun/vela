@@ -304,10 +304,11 @@ def process_segment_stream(
         "fatal",
         "-ss",
         f"{task.start_sec:.3f}",
-        "-t",
-        f"{task.duration_sec:.3f}",
         "-i",
         str(info.path),
+        # Limit emitted frames after seeking, not input demuxer read duration.
+        "-t",
+        f"{task.duration_sec:.3f}",
     ]
     if vf_filters:
         decode_cmd.extend(["-vf", ",".join(vf_filters)])

@@ -6,6 +6,7 @@ import multiprocessing as mp
 from contextlib import nullcontext
 import os
 import queue
+import re
 import shutil
 import subprocess
 import time
@@ -24,6 +25,15 @@ if TYPE_CHECKING:
 
 MP4_COMPATIBLE_AUDIO_CODECS = {"aac", "mp3", "ac3", "eac3", "alac"}
 _resource_warnings: set[tuple[int | None, str]] = set()
+
+
+def _normalize_smi_device(value: object) -> str:
+    """Adapt CUDA's bare UUID objects to nvidia-smi's GPU UUID spelling."""
+    device = (value.decode() if isinstance(value, bytes) else str(value)).strip()
+    if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", device):
+        return f"GPU-{device}"
+    # Keep numeric selectors, existing GPU-/MIG- IDs, and unknown text intact.
+    return device
 
 
 def _report_worker_resources(torch_module, gpu_id: int | None, stage: str) -> None:
@@ -51,11 +61,11 @@ def _report_worker_resources(torch_module, gpu_id: int | None, stage: str) -> No
         # Prefer the physical UUID when CUDA_VISIBLE_DEVICES remaps indices.
         uuid = getattr(cuda.get_device_properties(gpu_id), "uuid", None)
         if uuid:
-            smi_device = uuid.decode() if isinstance(uuid, bytes) else str(uuid)
+            smi_device = _normalize_smi_device(uuid)
         else:
             visible = os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
             if gpu_id < len(visible) and visible[gpu_id].strip():
-                smi_device = visible[gpu_id].strip()
+                smi_device = _normalize_smi_device(visible[gpu_id])
     except Exception as exc:
         warn_once("PyTorch", exc)
 

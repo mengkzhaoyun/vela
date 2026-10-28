@@ -54,8 +54,8 @@ docker run --rm --gpus all \
   -v /data/jasna/model_weights:/app/vela/model_weights \
   -v /data/jasna/ais:/data \
   registry.cn-qingdao.aliyuncs.com/wod/cuda:13.0.3-vela-v0.1.0 \
-  --input /data/MKZ-033.mkv \
-  --output /data/MKZ-033_1080p.mp4 \
+  --input /data/input_480p.mkv \
+  --output /data/output_1080p.mp4 \
   --gpus 0,1 \
   --model realplksr
 ```

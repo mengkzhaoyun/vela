@@ -46,7 +46,7 @@ def test_upscaler_fallback_batch_rgb24() -> None:
 
 def test_integer_fps_decimation() -> None:
     info_60 = VideoInfo(
-        path=Path("MKZ-033.mkv"),
+        path=Path("input_480p.mkv"),
         width=854,
         height=480,
         fps=19001.0 / 317.0,
@@ -67,7 +67,7 @@ def test_cli_and_bitrate_parser() -> None:
     assert parse_bitrate_to_kbps("5M") == 5000
     assert parse_bitrate_to_kbps("2500K") == 2500
     parser = build_parser()
-    args = parser.parse_args(["--input", "MKZ-033.mkv", "--gpus", "0,1", "--model", "realplksr"])
+    args = parser.parse_args(["--input", "input_480p.mkv", "--gpus", "0,1", "--model", "realplksr"])
     assert args.gpus == "0,1"
     assert args.model == "realplksr"
     cfg = VelaConfig(model_name="realplksr")

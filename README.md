@@ -26,7 +26,7 @@ Built as a sister project to [`jasna`](https://github.com/Mengkzhaoyun/jasna) an
 
 ```bash
 # Upscale a single 480p video to 1080p across all available GPUs
-vela --input MKZ-033.mkv --output MKZ-033_1080p.mp4 --gpus all --model realplksr
+vela --input input_480p.mkv --output output_1080p.mp4 --gpus all --model realplksr
 
 # Batch scan a directory (/data) and upscale all <1080p videos using GPUs 0 and 1
 vela --scan-dir /data --gpus 0,1 --model realplksr --codec hevc --target-bitrate 5M
@@ -48,4 +48,4 @@ docker run --name vela \
   registry.cn-qingdao.aliyuncs.com/wod/cuda:13.0.3-vela-v0.1.0
 ```
 
-See [`.drone/README.md`](.drone/README.md) for full production deployment, offline model download, and CI/CD instructions.
+See [`docs/technical-whitepaper.md`](docs/technical-whitepaper.md) for the complete VSR taxonomy and engine architecture, and [`.drone/README.md`](.drone/README.md) for full production deployment, offline model download, and CI/CD instructions.

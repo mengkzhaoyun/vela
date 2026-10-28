@@ -11,7 +11,7 @@
 
 - [研究计划](../../plan/2026.10.restoration-order.plan.md)：脚本交付任务与人工执行、审阅分工。
 - [技术方案](../../restoration-order-study.md)：性能与画质分别评价的证据边界。
-- 交付时执行指南：Git 提交 `37dc873` 中的 `docs/component-benchmark-guide.md`；文件已由[后续范围纠正](../../changes/change_20261028_organize-runtime-logs.md)撤回。
+- 交付时执行指南：Git 提交 `37dc873` 中的 `docs/component-benchmark-guide.md`；文件已由[后续范围纠正](change_20261028_organize-runtime-logs.md)撤回。
 - 交付时接口测试：Git 提交 `37dc873` 中的 `tests/test_component_benchmarks.py`；历史测试结果保留，当前不再提供该组件测试入口。
 
 ## 2. 范围与完成条件

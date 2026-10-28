@@ -63,7 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codec", default="hevc", choices=["hevc", "h264", "av1"], help="Output video codec (default: hevc)")
     parser.add_argument("--target-bitrate", default="5M", help="Target bitrate for NVENC (default: 5M)")
     parser.add_argument("--encoder-cq", type=int, default=20, help="NVENC CQ / x264 CRF quality value (default: 20)")
-    parser.add_argument("--compile", action="store_true", help="Enable torch.compile graph optimization on CUDA")
+    parser.add_argument("--compile", dest="compile", action="store_true", default=True, help="Enable torch.compile graph optimization on CUDA (default: enabled)")
+    parser.add_argument("--no-compile", dest="compile", action="store_false", help="Disable torch.compile graph optimization")
     parser.add_argument("--keep-temp", action="store_true", help="Keep .vela_work temporary segment files")
     return parser
 

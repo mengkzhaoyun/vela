@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import functools
+import queue
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -186,20 +188,53 @@ def process_segment_stream(
     seg_t0 = time.time()
 
     processed_frames = 0
-    try:
-        assert dec_proc.stdout is not None
-        assert enc_proc.stdin is not None
+    read_q: queue.Queue[torch.Tensor | None] = queue.Queue(maxsize=3)
+    write_q: queue.Queue[torch.Tensor | None] = queue.Queue(maxsize=3)
+    writer_err: list[BaseException] = []
+    use_pin = torch.cuda.is_available()
 
+    def _reader_loop() -> None:
+        assert dec_proc.stdout is not None
+        try:
+            while True:
+                raw_chunk = dec_proc.stdout.read(frame_bytes * batch_size)
+                if not raw_chunk:
+                    break
+                n_f = len(raw_chunk) // frame_bytes
+                if n_f == 0:
+                    break
+                valid = memoryview(raw_chunk)[: n_f * frame_bytes]
+                arr = np.frombuffer(valid, dtype=np.uint8).reshape((n_f, info.height, info.width, 3))
+                t_cpu = torch.empty((n_f, info.height, info.width, 3), dtype=torch.uint8, pin_memory=use_pin)
+                t_cpu.numpy()[:] = arr
+                read_q.put(t_cpu)
+        finally:
+            read_q.put(None)
+
+    def _writer_loop() -> None:
+        assert enc_proc.stdin is not None
+        try:
+            while True:
+                out_t = write_q.get()
+                if out_t is None:
+                    break
+                enc_proc.stdin.write(memoryview(out_t.numpy()))
+        except BaseException as exc:
+            writer_err.append(exc)
+
+    reader_thread = threading.Thread(target=_reader_loop, daemon=True)
+    writer_thread = threading.Thread(target=_writer_loop, daemon=True)
+    reader_thread.start()
+    writer_thread.start()
+
+    try:
         while True:
-            raw_chunk = dec_proc.stdout.read(frame_bytes * batch_size)
-            if not raw_chunk:
+            batch_tensor = read_q.get()
+            if batch_tensor is None:
                 break
-            n_frames = len(raw_chunk) // frame_bytes
-            if n_frames == 0:
-                break
-            valid_bytes = raw_chunk[: n_frames * frame_bytes]
-            arr = np.frombuffer(valid_bytes, dtype=np.uint8).reshape((n_frames, info.height, info.width, 3))
-            batch_tensor = torch.from_numpy(arr.copy())
+            if writer_err:
+                raise writer_err[0]
+            n_frames = batch_tensor.shape[0]
 
             out_tensor = upscaler.process_batch_rgb24(
                 batch_tensor,
@@ -207,7 +242,7 @@ def process_segment_stream(
                 target_h=cfg.target_height,
                 cas_strength=cfg.cas_strength,
             )
-            enc_proc.stdin.write(out_tensor.numpy().tobytes())
+            write_q.put(out_tensor)
             processed_frames += n_frames
 
             if processed_frames >= next_log_frames and processed_frames < est_frames:
@@ -220,7 +255,13 @@ def process_segment_stream(
                 )
                 next_log_frames += log_step
 
-        enc_proc.stdin.close()
+        write_q.put(None)
+        writer_thread.join()
+        reader_thread.join()
+        if writer_err:
+            raise writer_err[0]
+        if enc_proc.stdin is not None:
+            enc_proc.stdin.close()
         enc_proc.wait()
         dec_proc.wait()
         if enc_proc.returncode != 0:

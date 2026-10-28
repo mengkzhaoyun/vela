@@ -42,7 +42,7 @@ class VelaConfig:
         default_factory=lambda: os.environ.get("PRESERVE_LOW_BITRATE", "false").lower() in ("1", "true", "yes")
     )
     compile_model: bool = field(
-        default_factory=lambda: os.environ.get("COMPILE_MODEL", "false").lower() in ("1", "true", "yes")
+        default_factory=lambda: os.environ.get("COMPILE_MODEL", "true").lower() in ("1", "true", "yes")
     )
     keep_temp: bool = False
 

@@ -101,6 +101,7 @@ def _gpu_worker_process(
             model_path=model_file if model_file.exists() else None,
             device=dev_str,
             compile_model=cfg.compile_model,
+            batch_size=b_size,
         )
         while True:
             try:
@@ -158,10 +159,10 @@ class MultiGPUScheduler:
             if self.gpu_specs
             else "CPU Fallback (0 CUDA GPUs detected)"
         )
-        out_fps, _ = resolve_effective_fps(info, self.cfg)
+        out_fps, out_fps_rational, _ = resolve_effective_fps(info, self.cfg)
         print(f"[VELA] Input: {input_video.name} ({info.width}x{info.height} @ {info.fps:.2f}fps, {info.duration:.1f}s)")
         print(
-            f"[VELA] Target: {self.cfg.target_width}x{self.cfg.target_height} @ {out_fps:.2f}fps | "
+            f"[VELA] Target: {self.cfg.target_width}x{self.cfg.target_height} @ {out_fps:.2f}fps ({out_fps_rational}) | "
             f"Model: {model_file.name} | Segments: {len(segments)}"
         )
         print(f"[VELA] Workers: {gpu_summary}", flush=True)
@@ -192,23 +193,31 @@ class MultiGPUScheduler:
         errors: list[str] = []
         completed_count = 0
 
+        active_t0: float | None = None
+        active_completed = 0
+
         while completed_count < len(segments) and any(p.is_alive() for p in procs):
             try:
                 status, n_f, err_msg = result_queue.get(timeout=1.0)
                 if status == "err":
                     errors.append(err_msg or "Unknown worker error")
                     break
-                total_frames += int(n_f)
                 completed_count += 1
-                elapsed_now = max(time.time() - t0, 1e-3)
-                pct = completed_count * 100.0 / len(segments)
-                eta_min = ((len(segments) - completed_count) * (elapsed_now / completed_count)) / 60.0
-                print(
-                    f"[VELA] Progress: {completed_count}/{len(segments)} ({pct:.1f}%) | "
-                    f"Frames: {total_frames} | Avg Speed: {total_frames / elapsed_now:.1f} fps | "
-                    f"Elapsed: {elapsed_now / 60.0:.1f}m | ETA: {eta_min:.1f}m",
-                    flush=True,
-                )
+                if int(n_f) > 0:
+                    if active_t0 is None:
+                        active_t0 = time.time() - (int(n_f) / 15.0)
+                    total_frames += int(n_f)
+                    active_completed += 1
+                    elapsed_now = max(time.time() - active_t0, 1e-3)
+                    pct = completed_count * 100.0 / len(segments)
+                    rem_segs = len(segments) - completed_count
+                    eta_min = (rem_segs * (elapsed_now / max(1, active_completed))) / 60.0
+                    print(
+                        f"[VELA] Progress: {completed_count}/{len(segments)} ({pct:.1f}%) | "
+                        f"Frames: {total_frames} | Avg Speed: {total_frames / elapsed_now:.1f} fps | "
+                        f"Elapsed: {elapsed_now / 60.0:.1f}m | ETA: {eta_min:.1f}m",
+                        flush=True,
+                    )
             except queue.Empty:
                 continue
 

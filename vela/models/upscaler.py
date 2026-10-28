@@ -55,6 +55,9 @@ def gpu_cas_sharpen(frames_bchw: torch.Tensor, strength: float = 0.25) -> torch.
     return sharpened.clamp_(0.0, 1.0)
 
 
+from vela.models.trt_engine import VelaTRTEngine, is_tensorrt_available
+
+
 def _patch_plksr_for_compile_and_nhwc(model: torch.nn.Module, use_channels_last: bool = True) -> None:
     """
     Replace PLKConv2d's in-place non-contiguous slice assignment:
@@ -81,21 +84,23 @@ def _patch_plksr_for_compile_and_nhwc(model: torch.nn.Module, use_channels_last:
 
 
 class VelaUpscaler:
-    """GPU-resident video super-resolution model wrapper."""
+    """GPU-resident video super-resolution model wrapper (TensorRT FP16 primary, torch.compile fallback)."""
 
     def __init__(
         self,
         model_path: Path | None,
         device: str | torch.device = "cuda:0",
         compile_model: bool = True,
+        batch_size: int = 8,
     ) -> None:
         self.device = torch.device(device if torch.cuda.is_available() or str(device) == "cpu" else "cpu")
         self.model_path = model_path
+        self.batch_size = max(1, int(batch_size))
         self.dtype = torch.float32
         self.use_channels_last = False
+        self.backend = "cpu"
         self.model = None
-        self._eager_model = None
-        self._compiled_batch_size: int | None = None
+        self._trt_engine: VelaTRTEngine | None = None
 
         if model_path is not None and model_path.exists():
             from spandrel import ModelLoader
@@ -114,24 +119,80 @@ class VelaUpscaler:
             resolved_path = model_path.resolve()
             descriptor = loader.load_from_file(str(resolved_path))
             descriptor.eval()
+            scale = int(getattr(descriptor, "scale", 4))
 
             if self.device.type == "cuda":
                 self.use_channels_last = True
-                _patch_plksr_for_nhwc = True
                 descriptor.model.to(device=self.device, dtype=torch.float16, memory_format=torch.channels_last)
                 self.dtype = torch.float16
             else:
-                _patch_plksr_for_nhwc = False
                 descriptor.model.to(device=self.device, dtype=torch.float32)
                 self.dtype = torch.float32
 
-            _patch_plksr_for_compile_and_nhwc(descriptor.model, use_channels_last=_patch_plksr_for_nhwc)
-            self._eager_model = descriptor.model
+            _patch_plksr_for_compile_and_nhwc(descriptor.model, use_channels_last=self.use_channels_last)
 
-            if compile_model and hasattr(torch, "compile") and self.device.type == "cuda":
+            backend_pref = os.environ.get("VELA_BACKEND", "auto").strip().lower()
+            if self.device.type == "cuda" and backend_pref in ("auto", "trt", "tensorrt") and is_tensorrt_available():
+                self._trt_engine = VelaTRTEngine(
+                    pytorch_model=descriptor.model,
+                    model_path=resolved_path,
+                    device=self.device,
+                    scale=scale,
+                    precision="fp16",
+                )
+                self.model = self._trt_engine
+                self.backend = "tensorrt-fp16"
+            elif compile_model and hasattr(torch, "compile") and self.device.type == "cuda" and backend_pref != "eager":
                 self.model = torch.compile(descriptor.model, mode="default")
+                self.backend = "torch-compile-fp16"
             else:
                 self.model = descriptor.model
+                self.backend = "pytorch-eager"
+
+    def _forward_gpu_uint8(
+        self,
+        raw_rgb_uint8: torch.Tensor,
+        target_w: int = 1920,
+        target_h: int = 1080,
+        cas_strength: float = 0.25,
+    ) -> torch.Tensor:
+        """
+        Run SR + bicubic AA downscale + CAS on GPU and return contiguous (B, target_h, target_w, 3) uint8 GPU tensor.
+        Pads remainder batches (b_cur < self.batch_size) to static self.batch_size to avoid dynamic recompilation.
+        """
+        b_cur = raw_rgb_uint8.shape[0]
+        gpu_u8 = raw_rgb_uint8.to(device=self.device, non_blocking=True)
+
+        if self.model is not None and b_cur < self.batch_size:
+            pad_n = self.batch_size - b_cur
+            pad_tail = gpu_u8[-1:].expand(pad_n, -1, -1, -1)
+            gpu_u8_padded = torch.cat([gpu_u8, pad_tail], dim=0)
+        else:
+            gpu_u8_padded = gpu_u8
+
+        x = gpu_u8_padded.permute(0, 3, 1, 2).to(dtype=self.dtype).mul_(1.0 / 255.0)
+        if self.use_channels_last and self._trt_engine is None:
+            x = x.contiguous(memory_format=torch.channels_last)
+
+        if self.model is not None:
+            sr = self.model(x)
+            if sr.shape[0] > b_cur:
+                sr = sr[:b_cur]
+        else:
+            sr = x[:b_cur]
+
+        sr_1080 = gpu_resize_to_target(sr, target_h=target_h, target_w=target_w)
+        if cas_strength > 0.0:
+            sr_1080 = gpu_cas_sharpen(sr_1080, strength=cas_strength)
+
+        out_uint8_gpu = (
+            (sr_1080 * 255.0 + 0.5)
+            .clamp_(0, 255)
+            .to(dtype=torch.uint8)
+            .permute(0, 2, 3, 1)
+            .contiguous()
+        )
+        return out_uint8_gpu
 
     @torch.inference_mode()
     def process_batch_rgb24(
@@ -145,33 +206,28 @@ class VelaUpscaler:
         Input: (B, H, W, 3) uint8 tensor on CPU/pinned memory.
         Output: (B, target_h, target_w, 3) uint8 tensor on CPU ready for NVENC pipe.
         """
+        return self._forward_gpu_uint8(raw_rgb_uint8, target_w=target_w, target_h=target_h, cas_strength=cas_strength).cpu()
+
+    @torch.inference_mode()
+    def process_batch_rgb24_async(
+        self,
+        raw_rgb_uint8: torch.Tensor,
+        out_pinned_buf: torch.Tensor,
+        target_w: int = 1920,
+        target_h: int = 1080,
+        cas_strength: float = 0.25,
+    ) -> tuple[torch.Tensor, torch.cuda.Event | None]:
+        """
+        Asynchronous GPU->CPU DMA into pre-allocated pinned output buffer with CUDA Event synchronization.
+        Eliminates synchronous .cpu() stalls between batches.
+        """
         b_cur = raw_rgb_uint8.shape[0]
-        if self._compiled_batch_size is None:
-            self._compiled_batch_size = b_cur
-
-        gpu_u8 = raw_rgb_uint8.to(device=self.device, non_blocking=True)
-        x = gpu_u8.permute(0, 3, 1, 2).to(dtype=self.dtype).mul_(1.0 / 255.0)
-        if self.use_channels_last:
-            x = x.contiguous(memory_format=torch.channels_last)
-
-        if self.model is not None:
-            # Avoid triggering a second torch.compile recompilation on the final remainder batch of a segment
-            active_model = self.model if b_cur == self._compiled_batch_size else (self._eager_model or self.model)
-            sr = active_model(x)
-        else:
-            sr = x
-
-        sr_1080 = gpu_resize_to_target(sr, target_h=target_h, target_w=target_w)
-        if cas_strength > 0.0:
-            sr_1080 = gpu_cas_sharpen(sr_1080, strength=cas_strength)
-
-        out_uint8 = (
-            (sr_1080 * 255.0 + 0.5)
-            .clamp_(0, 255)
-            .to(dtype=torch.uint8)
-            .permute(0, 2, 3, 1)
-            .contiguous()
-            .cpu()
-        )
-        return out_uint8
+        out_gpu = self._forward_gpu_uint8(raw_rgb_uint8, target_w=target_w, target_h=target_h, cas_strength=cas_strength)
+        out_slice = out_pinned_buf[:b_cur]
+        out_slice.copy_(out_gpu, non_blocking=True)
+        if self.device.type == "cuda":
+            ev = torch.cuda.Event()
+            ev.record(torch.cuda.current_stream(self.device))
+            return out_slice, ev
+        return out_slice, None
 

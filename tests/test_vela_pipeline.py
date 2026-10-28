@@ -8,7 +8,8 @@ import torch
 from vela.cli import VIDEO_EXTENSIONS, build_parser
 from vela.config import VelaConfig
 from vela.models.upscaler import VelaUpscaler, gpu_cas_sharpen, gpu_resize_to_target
-from vela.pipeline.probe import _parse_duration, _parse_fps, parse_bitrate_to_kbps, plan_segments
+from vela.pipeline.probe import VideoInfo, _parse_duration, _parse_fps, parse_bitrate_to_kbps, plan_segments
+from vela.pipeline.worker import resolve_effective_fps
 
 
 def test_plan_segments_exact_and_remainder(tmp_path: Path) -> None:
@@ -31,11 +32,35 @@ def test_gpu_resize_and_cas_sharpen() -> None:
 
 
 def test_upscaler_fallback_batch_rgb24() -> None:
-    upscaler = VelaUpscaler(model_path=None, device="cpu")
+    upscaler = VelaUpscaler(model_path=None, device="cpu", batch_size=8)
     raw_batch = torch.randint(0, 256, (2, 240, 426, 3), dtype=torch.uint8)
     out = upscaler.process_batch_rgb24(raw_batch, target_w=1920, target_h=1080, cas_strength=0.25)
     assert out.shape == (2, 1080, 1920, 3)
     assert out.dtype == torch.uint8
+
+    out_buf = torch.empty((8, 1080, 1920, 3), dtype=torch.uint8)
+    out_slice, ev = upscaler.process_batch_rgb24_async(raw_batch, out_buf, target_w=1920, target_h=1080, cas_strength=0.25)
+    assert out_slice.shape == (2, 1080, 1920, 3)
+    assert ev is None
+
+
+def test_integer_fps_decimation() -> None:
+    info_60 = VideoInfo(
+        path=Path("MKZ-033.mkv"),
+        width=854,
+        height=480,
+        fps=19001.0 / 317.0,
+        fps_rational="19001/317",
+        duration=100.0,
+        bitrate_kbps=2130,
+        codec_name="h264",
+        has_audio=True,
+    )
+    cfg = VelaConfig(max_fps=30.0)
+    out_fps, out_rat, capped = resolve_effective_fps(info_60, cfg)
+    assert capped is True
+    assert out_rat == "19001/634"
+    assert abs(out_fps - 29.97003) < 0.001
 
 
 def test_cli_and_bitrate_parser() -> None:
@@ -60,6 +85,7 @@ if __name__ == "__main__":
         test_plan_segments_exact_and_remainder(Path(td))
     test_gpu_resize_and_cas_sharpen()
     test_upscaler_fallback_batch_rgb24()
+    test_integer_fps_decimation()
     test_cli_and_bitrate_parser()
-    print("[PASS] All 4 Vela pipeline unit tests passed!")
+    print("[PASS] All 5 Vela pipeline unit tests passed!")
 

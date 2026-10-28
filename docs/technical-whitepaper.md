@@ -1,12 +1,6 @@
 # Vela 技术白皮书：面向真实世界视频超分的多 GPU 流式引擎架构
 
-**封面候选 · 待审阅**
-
-两版采用相同创作主题与标题排版，供对比选定。封面为概念视觉，非超分效果实测样张。
-
-| A · VF Studio | B · imagegen API |
-| :---: | :---: |
-| [![A 版封面：VF Studio](assets/vela-whitepaper-cover-vf.png)](assets/vela-whitepaper-cover-vf.png) | [![B 版封面：imagegen API](assets/vela-whitepaper-cover-imagegen.png)](assets/vela-whitepaper-cover-imagegen.png) |
+[![Vela 技术白皮书封面](assets/vela-whitepaper-cover-vf.png)](assets/vela-whitepaper-cover-vf.png)
 
 **当前依据**
 
@@ -19,7 +13,6 @@
 - [Spandrel PLKSR 超分器与显存后处理](../vela/models/upscaler.py)：`PLKConv2d` NHWC 图融合、显存内抗锯齿下采样与 GPU 自适应对比度锐化（CAS）。
 - [PLKSR 论文 (arXiv:2405.11845)](https://arxiv.org/abs/2405.11845)：_Partial Large Kernel CNNs for Efficient Super-Resolution_（Lee et al., 2024）。
 - [社区 11 种视频超分方法横评](https://www.reddit.com/r/StableDiffusion/comments/1xha6jy/ive_tested_11_video_upscaling_methods/)：开源扩散工作流、商业桌面软件与感知型 CNN 超分模型的实测对比。
-
 
 ## 1. 执行摘要与视频超分（VSR）分类体系
 

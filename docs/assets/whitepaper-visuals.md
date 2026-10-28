@@ -2,7 +2,7 @@
 
 ## 1. 当前依据
 
-- [技术白皮书](../technical-whitepaper.md)：两张架构图与封面候选的嵌入文档。
+- [技术白皮书](../technical-whitepaper.md)：两张架构图与正式封面的嵌入文档。
 - [媒体探测与分段](../../vela/pipeline/probe.py)：按时长生成任务。
 - [多 GPU 调度](../../vela/pipeline/scheduler.py)：共享队列、独立进程与首音轨合并。
 - [流式工作器](../../vela/pipeline/worker.py)：四槽锁页缓冲、处理帧数检查与分段文件。
@@ -11,14 +11,14 @@
 
 ## 2. 交付素材
 
-日期：2026-10-28。封面 A / B 均为待用户选定的审阅候选。
+日期：2026-10-28。Mengsk 已选定 **A 版（VF Studio）** 为白皮书正式封面，正文采用单图展示；B 版保留为未采用的对照素材。
 
 | 素材 | 用途 |
 | --- | --- |
 | [vela-overall-architecture.svg](vela-overall-architecture.svg) | 总体架构，1800 × 1180 原生矢量 |
 | [vela-technical-architecture.svg](vela-technical-architecture.svg) | 技术架构，1800 × 1500 原生矢量 |
-| [vela-whitepaper-cover-vf.png](vela-whitepaper-cover-vf.png) | A 版：VF Studio 底图 + 统一标题排版 |
-| [vela-whitepaper-cover-imagegen.png](vela-whitepaper-cover-imagegen.png) | B 版：imagegen API 底图 + 统一标题排版 |
+| [vela-whitepaper-cover-vf.png](vela-whitepaper-cover-vf.png) | 正式封面：VF Studio 底图 + 标题排版 |
+| [vela-whitepaper-cover-imagegen.png](vela-whitepaper-cover-imagegen.png) | 未采用的 imagegen 对照封面 |
 | [vela-whitepaper-cover-vf-art.png](vela-whitepaper-cover-vf-art.png) | A 版未经修改的生成原图 |
 | [vela-whitepaper-cover-imagegen-art.png](vela-whitepaper-cover-imagegen-art.png) | B 版未经修改的生成原图 |
 
@@ -37,7 +37,7 @@
 - 请求规格：16:9、4K、high；实际规格见第 2 节。
 - 服务任务：`imgtask-e02ddc35a0df4b06`。
 - 来源项目：`01a18090-88d2-71f8-8435-e19d359c9545`。
-- 原图、提示词与审阅记录已保存至来源项目，固定修订 `01a180a2-37b9-71a7-bd1c-8eaea30ec9e4` 已回读核验；候选未选用。
+- 原图、提示词与初始审阅记录已保存至来源项目，固定修订 `01a180a2-37b9-71a7-bd1c-8eaea30ec9e4` 已回读核验。该修订记录生成时的候选状态；2026-10-28 用户随后明确选定 VF，本地白皮书已采用排版成图。
 - 下载文件的大小及 SHA-256 与服务端回读一致；图像、正向提示词与标题完成内容评估，`image.rate_content` 返回 `general`。
 
 实际提交提示词：

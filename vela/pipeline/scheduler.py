@@ -158,10 +158,12 @@ class MultiGPUScheduler:
             if self.gpu_specs
             else "CPU Fallback (0 CUDA GPUs detected)"
         )
-        out_fps, fps_capped = resolve_effective_fps(info, self.cfg)
-        fps_label = f"{info.fps:.2f}fps -> {out_fps:.2f}fps" if fps_capped else f"{info.fps:.2f}fps"
-        print(f"[VELA] Input: {input_video.name} ({info.width}x{info.height} @ {fps_label}, {info.duration:.1f}s)")
-        print(f"[VELA] Target: {self.cfg.target_width}x{self.cfg.target_height} | Model: {model_file.name} | Segments: {len(segments)}")
+        out_fps, _ = resolve_effective_fps(info, self.cfg)
+        print(f"[VELA] Input: {input_video.name} ({info.width}x{info.height} @ {info.fps:.2f}fps, {info.duration:.1f}s)")
+        print(
+            f"[VELA] Target: {self.cfg.target_width}x{self.cfg.target_height} @ {out_fps:.2f}fps | "
+            f"Model: {model_file.name} | Segments: {len(segments)}"
+        )
         print(f"[VELA] Workers: {gpu_summary}", flush=True)
 
         ctx = mp.get_context("spawn")

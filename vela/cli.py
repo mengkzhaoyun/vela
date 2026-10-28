@@ -73,7 +73,8 @@ def print_system_info(cfg: VelaConfig) -> int:
     model_file = cfg.resolve_model_file()
     print(f"Vela Multi-GPU Video Super-Resolution Engine v{__version__}")
     print(f"  Model Alias      : {cfg.model_name} -> {model_file} (exists={model_file.exists()})")
-    print(f"  Target Resolution: {cfg.target_width}x{cfg.target_height} | CAS={cfg.cas_strength}")
+    fps_desc = f"{cfg.target_fps:g}fps" if cfg.target_fps > 0 else f"max {cfg.max_fps:g}fps"
+    print(f"  Target Resolution: {cfg.target_width}x{cfg.target_height} @ {fps_desc} | CAS={cfg.cas_strength}")
     print(f"  NVENC Encoders   : hevc_nvenc={has_ffmpeg_encoder('hevc_nvenc')}, h264_nvenc={has_ffmpeg_encoder('h264_nvenc')}")
     if gpus:
         print(f"  Detected GPUs ({len(gpus)}):")

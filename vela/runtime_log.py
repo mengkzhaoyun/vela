@@ -313,10 +313,18 @@ def capture_output(
     native stderr disables native stdout unless explicitly overridden.
     """
     with _CAPTURE_LOCK:
-        stdout = _LineCapture(emit)
-        stderr = _LineCapture(emit)
         if capture_native_stdout is None:
             capture_native_stdout = capture_native_stderr
+        if os.name == "posix" and (capture_native_stdout or capture_native_stderr):
+            # Queue/Event creation starts a process-wide resource tracker on
+            # POSIX. It outlives individual video tasks and inherits stderr.
+            # Start it before redirecting fd 2 so it cannot keep a task's
+            # capture pipe open after all GPU workers have already exited.
+            from multiprocessing import resource_tracker
+
+            resource_tracker.ensure_running()
+        stdout = _LineCapture(emit)
+        stderr = _LineCapture(emit)
         native_stdout = _capture_native_stream(1, emit) if capture_native_stdout else nullcontext()
         native_stderr = _capture_native_stream(2, emit) if capture_native_stderr else nullcontext()
         try:

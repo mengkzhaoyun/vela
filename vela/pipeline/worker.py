@@ -468,6 +468,14 @@ def process_segment_stream(
                 out_slot = int(out_slot_obj)
 
                 batch_tensor = in_ring[in_slot][:n_frames]
+                first_batch = processed_frames == 0
+                first_batch_t0 = time.monotonic()
+                if first_batch:
+                    print(
+                        f"[VELA][{dev_tag}] Seg {task.idx + 1:03d}/{total_segments:03d} "
+                        f"首批开始 帧数={n_frames} 后端={getattr(upscaler, 'backend', '未记录')} "
+                        "阶段=转换、推理及输出传输（可能包含首次编译）", flush=True,
+                    )
                 out_slice, cuda_ev = upscaler.process_batch_rgb24_async(
                     batch_tensor,
                     out_ring[out_slot],
@@ -475,6 +483,16 @@ def process_segment_stream(
                     target_h=cfg.target_height,
                     cas_strength=cfg.cas_strength,
                 )
+                if first_batch:
+                    # Only synchronize the first batch, so this event means
+                    # output data is ready rather than CUDA work merely queued.
+                    if cuda_ev is not None:
+                        cuda_ev.synchronize()
+                    print(
+                        f"[VELA][{dev_tag}] Seg {task.idx + 1:03d}/{total_segments:03d} "
+                        f"首批完成 帧数={n_frames} 耗时={time.monotonic() - first_batch_t0:.3f}秒 "
+                        "范围=转换、推理及输出传输（含可能的首次编译）", flush=True,
+                    )
                 free_in_slots.put(in_slot)
                 if not _put_Abortable(write_q, (out_slice, cuda_ev, out_slot)):
                     break

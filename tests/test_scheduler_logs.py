@@ -4,12 +4,13 @@ from __future__ import annotations
 import io
 import os
 import queue
+import subprocess
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from vela.config import VelaConfig
 from vela.pipeline import scheduler, worker
@@ -164,10 +165,95 @@ class SchedulerLoggingTests(unittest.TestCase):
                 recorded.append(logs.get_nowait())
             except queue.Empty:
                 break
-        self.assertIn("model initialization", recorded)
-        self.assertIn("model warning", recorded)
+        self.assertIn("[VELA][CPU] model initialization", recorded)
+        self.assertIn("[VELA][CPU] model warning", recorded)
         self.assertTrue(any("Traceback (most recent call last)" in line for line in recorded))
+        self.assertTrue(all(line.startswith("[VELA][CPU]") for line in recorded))
         self.assertEqual(results.get_nowait()[0], "err")
+
+    def test_worker_reports_backend_lifecycle_and_tags_library_output(self):
+        torch_fake = types.ModuleType("torch")
+        torch_fake.cuda = types.SimpleNamespace(is_available=lambda: True, set_device=Mock())
+        model_fake = types.ModuleType("vela.models.upscaler")
+
+        def load_model(**kwargs):
+            print("[VELA-TRT] library initialization")
+            return types.SimpleNamespace(backend="tensorrt-fp16", model=object())
+
+        model_fake.VelaUpscaler = load_model
+        tasks, results, logs = LocalQueue(), LocalQueue(), LocalQueue()
+        tasks.put(SegmentTask(0, 0, 5, Path("seg.mp4")))
+        tasks.put(None)
+
+        def process(*args, **kwargs):
+            print("[VELA][CUDA:3] already attributed")
+            return 150
+
+        spec = GPUDeviceSpec(3, "fixture", 24, (8, 9), 8)
+        with patch.dict(sys.modules, {"torch": torch_fake, "vela.models.upscaler": model_fake}), \
+             patch.object(worker, "process_segment_stream", side_effect=process), \
+             patch.object(scheduler, "_report_worker_resources") as resources:
+            scheduler._gpu_worker_process(spec, VelaConfig(), self.info(Path("input.mp4")),
+                                          Path("fixture.pth"), 1, tasks, results, logs)
+        recorded = []
+        while not logs.empty():
+            recorded.append(logs.get_nowait())
+        text = "\n".join(recorded)
+        self.assertIn("Worker 初始化开始", text)
+        self.assertIn("Worker 初始化完成", text)
+        self.assertIn("后端=tensorrt-fp16 模型已加载=是 batch=8", text)
+        self.assertIn("Seg 001/001 处理开始", text)
+        self.assertIn("150 frames in", text)
+        self.assertIn("[VELA][CUDA:3] [VELA-TRT] library initialization", recorded)
+        self.assertIn("[VELA][CUDA:3] already attributed", recorded)
+        self.assertNotIn("[VELA][CUDA:3] [VELA][CUDA:3]", text)
+        self.assertEqual(resources.call_count, 2)
+        self.assertEqual(results.get_nowait(), ("ok", 0, 150, None))
+
+    def test_resource_snapshot_distinguishes_process_and_whole_gpu(self):
+        cuda = types.SimpleNamespace(
+            memory_allocated=lambda _: 128 << 20,
+            memory_reserved=lambda _: 256 << 20,
+            max_memory_allocated=lambda _: 512 << 20,
+            get_device_properties=lambda _: types.SimpleNamespace(uuid="GPU-fixture"),
+        )
+        lines = []
+        response = subprocess.CompletedProcess([], 0, "75, 1024, 24564, 60, 145.5\n", "")
+        with patch.object(scheduler.subprocess, "run", return_value=response) as query, capture_output(lines.append):
+            scheduler._report_worker_resources(types.SimpleNamespace(cuda=cuda), 3, "分段1完成")
+        self.assertEqual(query.call_args.kwargs["timeout"], 2.0)
+        self.assertIn("GPU-fixture", query.call_args.args[0])
+        text = "\n".join(lines)
+        for field in ("[CUDA:3]", "阶段=分段1完成", "进程Torch已分配=128.0MiB",
+                      "进程Torch保留=256.0MiB", "进程Torch峰值已分配=512.0MiB",
+                      "GPU利用率快照=75%", "整卡显存已用=1024MiB", "整卡功耗=145.5W"):
+            self.assertIn(field, text)
+
+    def test_resource_statistics_unavailable_do_not_fail_or_repeat_warnings(self):
+        scheduler._resource_warnings.clear()
+        lines = []
+        with patch.object(scheduler.subprocess, "run", side_effect=subprocess.TimeoutExpired("nvidia-smi", 2)), \
+             capture_output(lines.append):
+            scheduler._report_worker_resources(object(), 2, "初始化完成")
+            scheduler._report_worker_resources(object(), 2, "分段1完成")
+            scheduler._report_worker_resources(object(), None, "初始化完成")
+        self.assertEqual(sum("资源统计不可用 来源=PyTorch" in line for line in lines), 1)
+        self.assertEqual(sum("资源统计不可用 来源=nvidia-smi" in line for line in lines), 1)
+        self.assertEqual(sum("整卡资源快照=无法获取" in line for line in lines), 2)
+        self.assertTrue(any("[CPU]" in line and "CUDA统计=不适用" in line for line in lines))
+        scheduler._resource_warnings.clear()
+
+    def test_active_worker_count_is_limited_by_available_segments(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            engine = self.make_scheduler()
+            engine.gpu_specs = [GPUDeviceSpec(i, "fixture", 24, (8, 9), 8) for i in range(8)]
+            lines = []
+            with patch.object(scheduler, "_gpu_worker_process", fake_spawn_worker), \
+                 patch.object(scheduler, "mux_segments_with_audio"), capture_output(lines.append):
+                engine.process_video(root / "input.mp4", root / "out.mp4", input_info=self.info(root / "input.mp4"))
+            dispatch = next(line for line in lines if "实际调度" in line)
+            self.assertIn("workers=2 devices=CUDA:0,CUDA:1 分段数=2 发现GPU数=8", dispatch)
 
     def test_interruption_drains_cancelled_worker_before_returning(self):
         with tempfile.TemporaryDirectory() as td:

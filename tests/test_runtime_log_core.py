@@ -229,6 +229,82 @@ raise SystemExit(cli.main(['-i', 'sample.mp4']))
                 self.assertEqual(text.count(f"Vela sample.mp4 [1/1] 处理日志 {message}\n"), 1)
             self.assertIn("[批次] 批次结束", text)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX has a long-lived multiprocessing resource tracker")
+    def test_first_spawn_resources_inside_capture_do_not_hold_task_pipe_open(self) -> None:
+        # A fresh interpreter is essential: another spawn test may already
+        # have started the tracker with safe descriptors in this process.
+        script = r'''
+import io
+import multiprocessing as mp
+import os
+import sys
+import threading
+from pathlib import Path
+from vela.runtime_log import RunLog, capture_output
+
+
+def produce(queue, ready):
+    queue.put("worker finished")
+    ready.set()
+
+
+def exercise():
+    context = mp.get_context("spawn")
+    queue = context.Queue()
+    ready = context.Event()
+    process = context.Process(target=produce, args=(queue, ready))
+    try:
+        process.start()
+        assert ready.wait(5), "worker did not become ready"
+        assert queue.get(timeout=5) == "worker finished"
+        process.join(5)
+        assert process.exitcode == 0, "worker did not exit cleanly"
+        os.write(2, b"native after worker\n")
+    finally:
+        if process.is_alive():
+            process.kill()
+            process.join(5)
+        process.close()
+        queue.close()
+        queue.join_thread()
+        del ready
+
+
+if __name__ == "__main__":
+    if sys.argv[1] == "task":
+        path = Path("vela.log")
+        with RunLog(path, console=io.StringIO()) as log:
+            with log.task("no-media", 1, 1).capture():
+                exercise()
+            log.task("no-media", 1, 1).emit("处理完毕", "done")
+        text = path.read_text(encoding="utf-8")
+        assert text.index("native after worker") < text.index("处理完毕")
+    else:
+        records = []
+        with capture_output(records.append):
+            exercise()
+        assert records == ["native after worker"], records
+    assert not any(t.name.startswith("vela-native-") for t in threading.enumerate())
+    print("tracker capture passed")
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script_path = root / "tracker_smoke.py"
+            script_path.write_text(script, encoding="utf-8")
+            env = os.environ.copy()
+            repository = Path(__file__).resolve().parents[1]
+            env["PYTHONPATH"] = str(repository) + os.pathsep + env.get("PYTHONPATH", "")
+            env["PYTHONIOENCODING"] = "utf-8"
+            for mode in ("standalone", "task"):
+                with self.subTest(mode=mode):
+                    result = subprocess.run(
+                        [sys.executable, str(script_path), mode], cwd=root, env=env,
+                        capture_output=True, text=True, encoding="utf-8", timeout=20,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(result.stdout.strip(), "tracker capture passed")
+                    self.assertEqual(result.stderr, "")
+
 
 if __name__ == "__main__":
     unittest.main()

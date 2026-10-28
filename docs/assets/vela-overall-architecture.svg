@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180" role="img" aria-labelledby="title desc">
+  <title id="title">Vela 总体架构：单机多 GPU 流式视频超分</title>
+  <desc id="desc">CLI 配置驱动媒体探测和按时长分段，多个独立 GPU 进程从共享 multiprocessing.Queue 动态领取 SegmentTask。各进程完成 FFmpeg 解码、神经超分与编码，将验证后的压缩切片及完成标记保存在工作目录；主进程按切片顺序拼接视频并重封装首条原音轨，必要时将音频转为 AAC。原始帧通过内存管道流转，不落盘为图片。图示为当前单机实现，不表示关键帧对齐、分布式调度或字幕保留。</desc>
+  <defs>
+    <marker id="arrow-data" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 8 4 0 8Z" fill="#087f8c"/></marker>
+    <marker id="arrow-control" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0 8 4 0 8Z" fill="#3565a8"/></marker>
+    <style>
+      text { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; fill: #10263d; }
+      .eyebrow { font-size: 18px; font-weight: 700; letter-spacing: 3px; fill: #3565a8; }
+      .title { font-size: 44px; font-weight: 700; }
+      .subtitle { font-size: 22px; fill: #56697d; }
+      .heading { font-size: 26px; font-weight: 700; }
+      .body { font-size: 22px; }
+      .small { font-size: 20px; fill: #56697d; }
+      .micro { font-size: 18px; fill: #56697d; }
+      .white { fill: #ffffff; }
+      .data { fill: none; stroke: #087f8c; stroke-width: 3; stroke-linejoin: round; marker-end: url(#arrow-data); }
+      .bus { fill: none; stroke: #087f8c; stroke-width: 3; stroke-linejoin: round; }
+      .control { fill: none; stroke: #3565a8; stroke-width: 2.5; stroke-dasharray: 8 7; marker-end: url(#arrow-control); }
+      .panel { fill: #ffffff; stroke: #d3dfe8; stroke-width: 1.5; }
+    </style>
+  </defs>
+  <rect width="1800" height="1180" fill="#f7f9fc"/>
+  <text x="64" y="44" class="eyebrow">VELA / SYSTEM OVERVIEW</text>
+  <text x="64" y="103" class="title">总体架构</text>
+  <text x="64" y="143" class="subtitle">面向存量实拍长视频的单机多 GPU 流式超分引擎</text>
+  <text x="1736" y="103" text-anchor="end" font-size="56" font-weight="300" style="fill:#c6d5e1">01</text>
+
+  <!-- User entry and configuration: a control plane, not part of the frame stream. -->
+  <rect x="64" y="184" width="1672" height="110" rx="14" fill="#edf3fa" stroke="#c7d8eb"/>
+  <rect x="64" y="184" width="284" height="110" rx="14" fill="#10263d"/>
+  <path d="M334 184H348V294H334Z" fill="#10263d"/>
+  <text x="90" y="228" class="heading white">CLI / 配置入口</text>
+  <text x="90" y="264" class="small white">vela · VelaConfig</text>
+  <text x="386" y="226" class="body">输入文件 / 扫描目录　·　GPU 选择　·　模型权重　·　批次大小</text>
+  <text x="386" y="265" class="body">分段时长　·　目标尺寸 / 帧率　·　编码器 / 码率　·　CAS 强度</text>
+  <path d="M518 294V390" class="control"/>
+  <text x="537" y="335" font-size="18" fill="#3565a8">分段参数</text>
+  <path d="M1390 294V346" class="control"/>
+  <text x="1410" y="327" font-size="18" fill="#3565a8">设备 / 模型 / 编码配置</text>
+  <text x="64" y="352" class="eyebrow">01　输入与任务分发</text>
+
+  <!-- Source media. -->
+  <rect x="64" y="390" width="246" height="280" rx="14" class="panel"/>
+  <rect x="90" y="420" width="42" height="32" rx="4" fill="none" stroke="#087f8c" stroke-width="2.5"/>
+  <path d="M105 428L119 436 105 444Z" fill="#087f8c"/>
+  <text x="90" y="500" class="heading">输入原片</text>
+  <text x="90" y="546" class="body">480p / 576p</text>
+  <text x="90" y="581" class="body">720p 等存量视频</text>
+  <text x="90" y="630" class="small">视频流 + 原始音轨</text>
+
+  <!-- Probe only reads stream metadata; segmentation is by duration. -->
+  <rect x="368" y="390" width="300" height="280" rx="14" class="panel"/>
+  <text x="394" y="438" class="small">MEDIA PROBE</text>
+  <text x="394" y="482" class="heading">媒体探测与分段</text>
+  <text x="394" y="532" class="body">ffprobe 读取元信息</text>
+  <text x="394" y="570" class="body">按配置时长规划切片</text>
+  <text x="394" y="630" class="small">SegmentTask · 顺序编号</text>
+  <path d="M310 530H368" class="data"/>
+
+  <!-- Shared queue: dynamic pulling rather than a distributed scheduler. -->
+  <rect x="726" y="390" width="300" height="280" rx="14" fill="#eaf7f7" stroke="#b6dcde" stroke-width="1.5"/>
+  <text x="752" y="438" class="small">SCHEDULER</text>
+  <text x="752" y="482" class="heading">共享任务队列</text>
+  <text x="752" y="532" font-size="27" font-weight="700" fill="#087f8c">mp.Queue</text>
+  <text x="752" y="578" class="body">空闲进程动态领取</text>
+  <text x="752" y="630" class="small">异构显卡按处理速度分工</text>
+  <path d="M668 530H726" class="data"/>
+
+  <!-- Workers; compressed segment outputs merge below the group. -->
+  <rect x="1110" y="346" width="626" height="398" rx="18" fill="#eef4f8" stroke="#c5d5e1" stroke-width="1.5"/>
+  <text x="1140" y="386" class="heading">单机多 GPU · 每卡一个独立进程</text>
+  <rect x="1140" y="412" width="552" height="82" rx="10" class="panel"/>
+  <text x="1162" y="443" font-size="23" font-weight="700">GPU 0</text>
+  <text x="1668" y="443" text-anchor="end" class="micro">cuda:0</text>
+  <text x="1162" y="475" class="small">FFmpeg → 神经超分 / CAS → NVENC</text>
+  <rect x="1140" y="512" width="552" height="82" rx="10" class="panel"/>
+  <text x="1162" y="543" font-size="23" font-weight="700">GPU 1</text>
+  <text x="1668" y="543" text-anchor="end" class="micro">cuda:1</text>
+  <text x="1162" y="575" class="small">FFmpeg → 神经超分 / CAS → NVENC</text>
+  <rect x="1140" y="612" width="552" height="82" rx="10" class="panel"/>
+  <text x="1162" y="643" font-size="23" font-weight="700">GPU N−1</text>
+  <text x="1668" y="643" text-anchor="end" class="micro">cuda:N−1</text>
+  <text x="1162" y="675" class="small">FFmpeg → 神经超分 / CAS → NVENC</text>
+  <text x="1140" y="724" class="micro">spawn 隔离 CUDA 上下文 · result_queue 汇报进度与错误</text>
+  <path d="M1026 530H1080V453H1140" class="data"/>
+  <path d="M1080 530V653" class="bus"/>
+  <path d="M1080 553H1140" class="data"/>
+  <path d="M1080 653H1140" class="data"/>
+  <circle cx="1080" cy="530" r="4" fill="#087f8c"/>
+  <path d="M1692 453H1718V792H1463V826" class="data"/>
+  <path d="M1692 553H1718M1692 653H1718" class="bus"/>
+
+  <!-- Audio bypasses neural inference; only the first audio track is mapped. -->
+  <path d="M187 670V772H896V826" class="data"/>
+  <rect x="318" y="754" width="414" height="34" rx="8" fill="#f7f9fc"/>
+  <text x="525" y="778" text-anchor="middle" class="small">原片首条音轨 · 旁路直达重封装</text>
+  <text x="64" y="810" class="eyebrow">02　切片交付与成片</text>
+
+  <!-- Read the bottom row from right to left, following explicit arrows. -->
+  <rect x="1190" y="826" width="546" height="184" rx="14" fill="#fff7e9" stroke="#dfc69e" stroke-width="1.5"/>
+  <text x="1216" y="870" class="heading">切片落盘与断点复用</text>
+  <text x="1216" y="914" class="body">.vela_work / seg_*.mp4 + .done</text>
+  <text x="1216" y="952" class="small">退出码 / 帧数合理性检查后标记完成</text>
+  <text x="1216" y="985" class="small">重启跳过已完成切片 · 压缩视频暂存</text>
+  <rect x="680" y="826" width="432" height="184" rx="14" class="panel"/>
+  <text x="706" y="870" class="heading">按序拼接与音频封装</text>
+  <text x="706" y="914" class="body">Concat · 视频流复制</text>
+  <text x="706" y="952" class="small">首条原音轨优先复制</text>
+  <text x="706" y="985" class="small">容器不兼容 / 复制失败时转 AAC</text>
+  <rect x="64" y="826" width="538" height="184" rx="14" fill="#10263d"/>
+  <text x="90" y="870" class="heading white">标准视频成片</text>
+  <text x="90" y="918" font-size="28" font-weight="700" class="white">1080p / 4K</text>
+  <text x="90" y="957" class="small white">目标尺寸可配置 · HEVC / H.264 / AV1</text>
+  <text x="90" y="989" class="micro white">编码能力取决于设备与 FFmpeg 支持</text>
+  <path d="M1190 918H1112" class="data"/>
+  <path d="M680 918H602" class="data"/>
+
+  <rect x="64" y="1040" width="1672" height="64" rx="10" fill="#edf3fa"/>
+  <text x="88" y="1080" font-size="21" font-weight="700" fill="#3565a8">模型与引擎缓存</text>
+  <text x="310" y="1080" font-size="21" fill="#56697d">model_weights → Spandrel 加载 → TensorRT / PyTorch；TRT 缓存按模型、SM 架构、批次与尺寸区分</text>
+  <path d="M64 1138H113" class="data"/>
+  <text x="129" y="1145" class="micro">媒体 / 任务流</text>
+  <path d="M310 1138H359" class="control"/>
+  <text x="375" y="1145" class="micro">配置控制</text>
+  <rect x="539" y="1128" width="20" height="20" rx="4" fill="#fff7e9" stroke="#b67629"/>
+  <text x="574" y="1145" class="micro">切片与断点</text>
+  <text x="1736" y="1145" text-anchor="end" class="micro">原始帧不落盘为图片；压缩分段文件用于恢复与合并。</text>
+</svg>

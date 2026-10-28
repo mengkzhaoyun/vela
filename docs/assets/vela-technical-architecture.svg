@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1500" viewBox="0 0 1800 1500" role="img" aria-labelledby="title desc">
+  <title id="title">Vela 技术架构：单 GPU 流水线与双推理后端</title>
+  <desc id="desc">单 GPU 工作进程内，FFmpeg 解码输出 rgb24，Reader 线程通过 readinto 写入四槽锁页输入缓冲。批次经非阻塞 H2D 传输、FP16 预处理、RealPLKSR 超分、显存内抗锯齿缩放与 CAS 后，非阻塞 D2H 写入四槽锁页输出缓冲并记录 CUDA Event。Writer 等待事件后将裸帧交给 FFmpeg NVENC 编码，生成压缩分段。下方展开按依赖和配置选择的 TensorRT 与 PyTorch 后端；不表示 TensorRT 执行失败时自动回退。</desc>
+  <defs>
+    <marker id="data-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M 1 1 L 11 6 L 1 11 Z" fill="#087f8c"/></marker>
+    <marker id="config-arrow" viewBox="0 0 12 12" refX="10" refY="6" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 1 1 L 11 6 L 1 11 Z" fill="#3565a8"/></marker>
+    <style>
+      text { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; fill: #10263d; }
+      .title { font-size: 44px; font-weight: 700; }
+      .subtitle { font-size: 22px; fill: #526477; }
+      .section { font-size: 23px; font-weight: 700; letter-spacing: 1px; }
+      .node-title { font-size: 26px; font-weight: 700; }
+      .body { font-size: 22px; fill: #354e65; }
+      .small { font-size: 20px; fill: #526477; }
+      .tiny { font-size: 18px; fill: #526477; }
+      .teal { fill: #087f8c; }
+      .blue { fill: #3565a8; }
+      .amber { fill: #b67629; }
+      .node { fill: #fff; stroke: #ced9e3; stroke-width: 2; }
+      .data { fill: none; stroke: #087f8c; stroke-width: 3; marker-end: url(#data-arrow); }
+      .config { fill: none; stroke: #3565a8; stroke-width: 2.5; stroke-dasharray: 7 6; marker-end: url(#config-arrow); }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1500" fill="#f7f9fc"/>
+  <text x="64" y="44" font-size="18" font-weight="700" letter-spacing="3" style="fill:#3565a8">VELA / ENGINEERING</text>
+  <text x="64" y="103" class="title">技术架构</text>
+  <text x="64" y="143" class="subtitle">单 GPU 工作进程 · 流式内存通路、CUDA 计算边界与双推理后端</text>
+  <text x="1736" y="103" text-anchor="end" font-size="56" font-weight="300" style="fill:#c6d5e1">02</text>
+
+  <!-- Host input lane -->
+  <rect x="60" y="180" width="1680" height="200" rx="18" fill="#edf2f7" stroke="#d4dfe8" stroke-width="2"/>
+  <text x="90" y="219" class="section">01 / HOST RAM · 解码与输入缓冲</text>
+  <rect x="90" y="250" width="340" height="95" rx="12" class="node"/>
+  <text x="114" y="287" class="node-title">FFmpeg → Reader 线程</text>
+  <text x="114" y="323" class="body">rgb24 · readinto 直接填充</text>
+  <path d="M 430 297 H 498" class="data"/>
+  <rect x="510" y="250" width="400" height="95" rx="12" class="node"/>
+  <text x="534" y="287" class="node-title">in_ring · 锁页输入缓冲</text>
+  <text x="534" y="323" class="body">4 槽位 · uint8 · 批次复用</text>
+  <text x="1000" y="275" class="body">有界队列连接 Reader / 推理 / Writer</text>
+  <text x="1000" y="310" class="body">流式处理裸帧，避免整片张量驻留内存</text>
+  <text x="1000" y="345" class="small">read_q / write_q 容量均为 4</text>
+
+  <!-- Device lane -->
+  <rect x="60" y="415" width="1680" height="295" rx="18" fill="#edf7f7" stroke="#aed4d7" stroke-width="2"/>
+  <text x="90" y="456" class="section teal">02 / CUDA VRAM · 推理与后处理</text>
+  <text x="90" y="521" class="node-title">VelaUpscaler</text>
+  <text x="90" y="558" class="body">同一 GPU 内完成超分与缩放</text>
+  <text x="90" y="593" class="body">中间浮点张量保持在显存中</text>
+  <text x="90" y="636" class="small">本图以 4× RealPLKSR 为例</text>
+  <path d="M 660 345 V 493" class="data"/>
+  <rect x="680" y="384" width="302" height="27" fill="#f7f9fc"/>
+  <text x="689" y="405" class="small teal">H2D · non_blocking=True</text>
+  <rect x="510" y="505" width="300" height="140" rx="12" class="node"/>
+  <text x="534" y="544" class="node-title">批次预处理</text>
+  <text x="534" y="580" class="body">归一化 · FP16 · BCHW</text>
+  <text x="534" y="615" class="small">不足一批时补齐尾帧</text>
+  <path d="M 810 575 H 878" class="data"/>
+  <rect x="890" y="505" width="330" height="140" rx="12" fill="#087f8c"/>
+  <text x="914" y="544" class="node-title" style="fill:#fff">4× RealPLKSR 超分</text>
+  <text x="914" y="580" class="body" style="fill:#fff">TensorRT / PyTorch</text>
+  <text x="914" y="615" class="small" style="fill:#d5f1f0">初始化时选择一个后端</text>
+  <path d="M 1220 575 H 1288" class="data"/>
+  <rect x="1300" y="505" width="410" height="140" rx="12" class="node"/>
+  <text x="1324" y="544" class="node-title">显存内后处理</text>
+  <text x="1324" y="580" class="body">抗锯齿 bicubic → 可选 CAS</text>
+  <text x="1324" y="615" class="body">目标分辨率 → 连续 uint8</text>
+  <text x="510" y="682" class="small">TRT 专用流与当前 CUDA 流通过 wait_stream 协作</text>
+
+  <!-- Host output lane; data runs right to left -->
+  <rect x="60" y="745" width="1680" height="210" rx="18" fill="#edf2f7" stroke="#d4dfe8" stroke-width="2"/>
+  <text x="90" y="784" class="section">03 / HOST RAM → ENCODER · 输出同步与分段编码</text>
+  <path d="M 1505 645 V 803" class="data"/>
+  <text x="1170" y="735" class="small teal">D2H · non_blocking=True</text>
+  <text x="1530" y="735" class="small amber">记录 cuda.Event</text>
+  <rect x="1300" y="815" width="410" height="110" rx="12" class="node"/>
+  <text x="1324" y="851" class="node-title">out_ring · 锁页输出缓冲</text>
+  <text x="1324" y="886" class="body">4 槽位 · uint8 · 每批关联 Event</text>
+  <path d="M 1300 870 H 1232" class="data"/>
+  <rect x="890" y="815" width="330" height="110" rx="12" fill="#fff9ed" stroke="#d9bc8b" stroke-width="2"/>
+  <text x="914" y="849" class="node-title">Writer 线程</text>
+  <text x="914" y="880" class="body amber">等待 Event.synchronize()</text>
+  <text x="914" y="909" class="small">write(memoryview) → pipe</text>
+  <path d="M 890 870 H 822" class="data"/>
+  <rect x="510" y="815" width="300" height="110" rx="12" class="node"/>
+  <text x="534" y="851" class="node-title">FFmpeg · NVENC</text>
+  <text x="534" y="886" class="body">BT.709 · 压缩视频编码</text>
+  <path d="M 510 870 H 442" class="data"/>
+  <rect x="90" y="815" width="340" height="110" rx="12" class="node"/>
+  <text x="114" y="851" class="node-title">分段文件与完成标记</text>
+  <text x="114" y="886" class="body">.part.mp4 → .mp4 + .done</text>
+
+  <!-- Backend detail -->
+  <rect x="60" y="995" width="1680" height="375" rx="18" fill="#fff" stroke="#d4dfe8" stroke-width="2"/>
+  <text x="90" y="1037" class="section blue">04 / 模型节点展开 · 按依赖可用性与配置选择后端</text>
+  <rect x="90" y="1100" width="320" height="230" rx="12" fill="#f2f6fc" stroke="#b7cae1" stroke-width="2"/>
+  <text x="114" y="1140" class="node-title">Spandrel 模型装配</text>
+  <text x="114" y="1180" class="body">加载 .pth 权重</text>
+  <text x="114" y="1218" class="body">PLKConv2d 非原地补丁</text>
+  <text x="114" y="1256" class="body">FP16 · channels_last</text>
+  <text x="114" y="1301" class="small">VELA_BACKEND / 运行环境</text>
+  <path d="M 410 1160 H 488" class="config"/>
+  <path d="M 410 1270 H 456 V 1300 H 488" class="config"/>
+  <text x="510" y="1081" class="small blue">优先路径：CUDA + TensorRT / ONNX 可用，配置允许</text>
+  <rect x="510" y="1100" width="290" height="105" rx="10" fill="#f2f6fc" stroke="#b7cae1" stroke-width="2"/>
+  <text x="534" y="1140" class="node-title">ONNX 图导出</text>
+  <text x="534" y="1179" class="body">opset 17 · 按需执行</text>
+  <path d="M 800 1153 H 858" class="config"/>
+  <rect x="870" y="1100" width="400" height="105" rx="10" fill="#f2f6fc" stroke="#b7cae1" stroke-width="2"/>
+  <text x="894" y="1140" class="node-title">引擎构建 / 缓存加载</text>
+  <text x="894" y="1179" class="body">Linux 文件锁 · SM 专属引擎</text>
+  <path d="M 1270 1153 H 1328" class="config"/>
+  <rect x="1340" y="1100" width="370" height="105" rx="10" fill="#f2f6fc" stroke="#b7cae1" stroke-width="2"/>
+  <text x="1364" y="1140" class="node-title">TensorRT FP16</text>
+  <text x="1364" y="1179" class="body">execute_async_v3</text>
+  <text x="510" y="1238" class="small">引擎缓存键：模型 / SM / B / H / W / 精度；Timing Cache 按 SM 复用</text>
+  <rect x="510" y="1265" width="1200" height="65" rx="10" fill="#f2f6fc" stroke="#b7cae1" stroke-width="2"/>
+  <text x="534" y="1306" class="body"><tspan font-weight="700" fill="#3565a8">PyTorch FP16 路径</tspan><tspan>：channels_last（NHWC）· 按配置使用 torch.compile 或 eager</tspan></text>
+  <text x="510" y="1356" class="tiny">后端选择发生于初始化；图中不表示 TensorRT 构建或执行失败后的自动切换。</text>
+
+  <path d="M 60 1400 H 1740" stroke="#d4dfe8" stroke-width="2"/>
+  <text x="60" y="1435" class="small">边界：readinto 减少中间 bytes 拷贝；H2D / D2H 仍需 DMA；压缩分段会落盘。NVENC 不可用时可选软件编码。</text>
+  <text x="60" y="1473" class="tiny">实现依据：vela/pipeline/worker.py · vela/models/upscaler.py · vela/models/trt_engine.py</text>
+  <text x="1740" y="1473" text-anchor="end" class="tiny">VELA TECHNICAL WHITEPAPER / FIG. 02</text>
+</svg>

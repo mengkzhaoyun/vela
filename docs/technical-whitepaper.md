@@ -1,21 +1,35 @@
 # Vela 技术白皮书：面向真实世界视频超分的多 GPU 流式引擎架构
 
-- **当前依据**：
-  - [项目概览与快速开始](../README.md)：Vela 引擎的核心特性、CLI 命令行用法与容器化部署说明。
-  - [常见问题与技术进阶解答 (FAQ)](FAQ.md)：特写镜头皮肤发虚原因、特写快速识别算法与 `RealPLKSR + FlashVSR` 双级接力方案。
-  - [英文版技术白皮书 (English Version)](technical-whitepaper.en.md)：本文档的英文对照版本。
-  - [多 GPU 工作窃取调度器](../vela/pipeline/scheduler.py)：多进程隔离的 GOP 动态调度与无损音视频流重封装实现。
-  - [零拷贝异步 DMA 流式工作器](../vela/pipeline/worker.py)：FFmpeg 管道与 CUDA 流之间的锁页内存环形缓冲（Pinned Memory Ring）实现。
-  - [TensorRT FP16 推理引擎](../vela/models/trt_engine.py)：自动 ONNX 图导出、跨进程构建文件锁与异步 TensorRT 执行器。
-  - [Spandrel PLKSR 超分器与显存后处理](../vela/models/upscaler.py)：`PLKConv2d` NHWC 图融合、显存内抗锯齿下采样与 GPU 自适应对比度锐化（CAS）。
-  - [PLKSR 论文 (arXiv:2405.11845)](https://arxiv.org/abs/2405.11845)：_Partial Large Kernel CNNs for Efficient Super-Resolution_（Lee et al., 2024）。
-  - [社区 11 种视频超分方法横评](https://www.reddit.com/r/StableDiffusion/comments/1xha6jy/ive_tested_11_video_upscaling_methods/)：开源扩散工作流、商业桌面软件与感知型 CNN 超分模型的实测对比。
+**封面候选 · 待审阅**
+
+两版采用相同创作主题与标题排版，供对比选定。封面为概念视觉，非超分效果实测样张。
+
+| A · VF Studio | B · imagegen API |
+| :---: | :---: |
+| [![A 版封面：VF Studio](assets/vela-whitepaper-cover-vf.png)](assets/vela-whitepaper-cover-vf.png) | [![B 版封面：imagegen API](assets/vela-whitepaper-cover-imagegen.png)](assets/vela-whitepaper-cover-imagegen.png) |
+
+**当前依据**
+
+- [项目概览与快速开始](../README.md)：Vela 引擎的核心特性、CLI 命令行用法与容器化部署说明。
+- [常见问题与技术进阶解答 (FAQ)](FAQ.md)：特写镜头皮肤发虚原因、特写快速识别算法与 `RealPLKSR + FlashVSR` 双级接力方案。
+- [媒体探测与分段规划](../vela/pipeline/probe.py)：媒体元信息、GPU 能力探测与按时长切分任务。
+- [多 GPU 动态调度器](../vela/pipeline/scheduler.py)：共享队列、多进程隔离与视频拼接、首条音轨封装实现。
+- [零拷贝异步 DMA 流式工作器](../vela/pipeline/worker.py)：FFmpeg 管道与 CUDA 流之间的锁页内存环形缓冲（Pinned Memory Ring）实现。
+- [TensorRT FP16 推理引擎](../vela/models/trt_engine.py)：自动 ONNX 图导出、跨进程构建文件锁与异步 TensorRT 执行器。
+- [Spandrel PLKSR 超分器与显存后处理](../vela/models/upscaler.py)：`PLKConv2d` NHWC 图融合、显存内抗锯齿下采样与 GPU 自适应对比度锐化（CAS）。
+- [PLKSR 论文 (arXiv:2405.11845)](https://arxiv.org/abs/2405.11845)：_Partial Large Kernel CNNs for Efficient Super-Resolution_（Lee et al., 2024）。
+- [社区 11 种视频超分方法横评](https://www.reddit.com/r/StableDiffusion/comments/1xha6jy/ive_tested_11_video_upscaling_methods/)：开源扩散工作流、商业桌面软件与感知型 CNN 超分模型的实测对比。
+
 
 ## 1. 执行摘要与视频超分（VSR）分类体系
 
 在现代多媒体工程中，“视频超分与放大（Video Upscaling / VSR）”涵盖了底层数学机制截然不同的多种技术范式。如果试图用面向 3 秒 AI 生成短片的多步扩散重绘工作流，去处理长达两小时的低码率 480p 存量实拍长片，不仅会导致严重的人物五官变脸（Identity Drift），还会引发指数级崩溃的算力成本。
 
 **Vela** 是专为 **T1（忠实逆退化修复超分，Fidelity & Restoration VSR）** 打造的高吞吐、**多 GPU 流式视频超分引擎**，致力于将 480p、576p 与 720p 存量实拍视频无损升级至 1080p 与 4K，在彻底消除压缩伪影的同时，100% 锁定人物原生五官特征与跨帧时序稳定性。
+
+![图 1：Vela 总体架构——单机多 GPU 任务分发、流式超分、切片恢复与成片封装](assets/vela-overall-architecture.svg)
+
+_图 1 · 总体架构。上层配置驱动按时长分段与多 GPU 动态调度；压缩切片按序拼接，首条原音轨旁路进入封装。原始帧不落盘为图片，压缩分段保留用于恢复与合并。可[打开 SVG 原图](assets/vela-overall-architecture.svg)无损放大查看。_
 
 ### 1.1 核心二元划分：“VSR 存量长片忠实修复” vs “Upscale AI 脑补细节重绘”
 
@@ -132,34 +146,31 @@ flowchart TD
 
 ## 6. Vela 多 GPU 流式超分引擎架构详解
 
-传统的节点式 AI 工具（如 ComfyUI）在超分视频时，会将整段视频一次性解码为未压缩的 `FP32` 内存张量——**仅 60 秒的 1080p 60fps 视频就会瞬间吞噬 `179.4 GB` 系统内存**——或者在磁盘上读写数十万张临时 `.png` 图片。**Vela** 通过零中间文件、全流式多进程架构彻底消除了上述瓶颈。
+将整段视频一次性解码为未压缩的 `FP32` 内存张量时，**仅 60 秒的 1080p 60fps RGB 视频就需要约 `89.6 GB`（`83.4 GiB`）内存**；采用中间帧文件的流程则会在磁盘上读写大量临时图片。**Vela** 通过有界环形缓冲与多进程流式处理控制裸帧内存占用，不生成中间帧图片；编码后的压缩分段仍会写入 `.vela_work/`，用于恢复与最终拼接。
 
-### 6.1 多进程隔离的 GOP 工作窃取（Work-Stealing）拓扑
+![图 2：Vela 技术架构——锁页内存、CUDA 推理、异步 DMA 与双后端装配](assets/vela-technical-architecture.svg)
 
-```mermaid
-flowchart LR
-    A["输入视频 (.mkv / .mp4)"] --> B["FFprobe 关键帧探测与 GOP 切分"]
-    B --> C["无锁工作窃取队列 (mp.Queue)"]
-    C --> D["GPU 0 独立进程：FFmpeg 管道 -> 锁页环形缓冲 -> TRT FP16 -> NVENC"]
-    C --> E["GPU 1..N 独立进程：FFmpeg 管道 -> 锁页环形缓冲 -> TRT FP16 -> NVENC"]
-    D --> F["无损 Concat 拼接 + 原片音轨/章节重封装 + BT.709 色彩标记"]
-    E --> F
-    F --> G["输出：1080p HEVC / H.264 / AV1 高清成片"]
-```
+_图 2 · 技术架构。裸帧沿 Host RAM → CUDA VRAM → Host RAM 流转，Writer 等待 CUDA Event 后送入编码器；下方展开 TensorRT 与 PyTorch 的初始化选择、模型装配及缓存关系。可[打开 SVG 原图](assets/vela-technical-architecture.svg)无损放大查看。_
+
+### 6.1 多进程隔离的分段动态调度拓扑
+
+总体拓扑见图 1。当前实现由单机主进程按配置时长规划 `SegmentTask`，通过共享 `multiprocessing.Queue` 分发；未进行关键帧扫描或 GOP 边界对齐，也不将队列实现描述为无锁。
 
 1. **进程级隔离的 CUDA 上下文（`mp.get_context("spawn")`）**：
    - 多线程共享 Python 进程在同时驱动 8 张 GPU 时会遭遇严重的全局解释器锁（GIL）争用与 CUDA 流序列化阻塞。Vela 为每张 GPU 派生独立的操作系统子进程（`_gpu_worker_process`），将每个工作进程独占绑定至专属 `cuda:i` 设备。
-2. **动态工作窃取队列与断点续传（Crash-Safe Checkpointing）**：
-   - 长视频按关键帧边界被切分为独立的 GOP 切片任务（`SegmentTask`）。各 GPU 进程从共享 `mp.Queue` 中动态抢占切片，天然支持异构显卡集群（如 `RTX 5090 + RTX 4090` 混插）的动态负载均衡。
-   - 每个切片编码校验通过后在 `.vela_work/` 下原子写入 `.done` 标记，任务中断后重启可秒级跳过已完成的 GOP 切片。
+2. **动态领取任务与分段断点复用**：
+   - 长视频按配置时长被切分为独立任务。各 GPU 进程从共享 `mp.Queue` 中动态领取切片，使同机异构显卡（如 `RTX 5090 + RTX 4090` 混插）按处理速度分担工作。
+   - 每个切片通过 FFmpeg 退出码与处理帧数合理性检查后，以 `.part.mp4` 替换正式分段文件，再写入 `.done` 标记。重启时，工作器检查分段文件与完成标记是否存在、文件大小是否大于 `1024` 字节，满足条件即跳过；`.done` 本身不是原子写入。
+3. **按序合并与音频封装**：
+   - 主进程按切片编号执行 Concat，以 `-c:v copy` 拼接编码视频；仅映射原片首条音轨，优先复制，封装不兼容或复制失败时转为 `AAC 192k`。当前代码未显式映射字幕，也未建立完整章节保留契约。
 
 ### 6.2 双后端神经网络加速：TensorRT 10.16 FP16 与 NHWC 算子融合
 
-在每个 GPU 工作进程内部，`VelaUpscaler` 提供两套深度优化的硬件加速后端：
+在每个 GPU 工作进程内部，`VelaUpscaler` 按 `VELA_BACKEND` 配置、CUDA 与依赖可用性选择 TensorRT 或 PyTorch 路径（图 2 下半部）；该选择发生在初始化时，当前实现不提供 TensorRT 构建或执行失败后的自动切换：
 
 1. **主后端 —— 原生 TensorRT FP16 引擎（`VelaTRTEngine`）**：
    - 自动将 `Spandrel` 加载的 PyTorch 模型导出为 ONNX（opset 17），并针对当前显卡 SM 架构编译持久化的 **TensorRT FP16** 序列化引擎（如 `realplksr_sm89_b8_480x854_fp16.engine`）与 Timing Cache。
-   - 内置跨进程文件锁（`_FileLock`），确保多 GPU 并发启动时仅由首个进程编译一次引擎，其余进程直接反序列化共享加载。
+   - 在 Linux / 容器环境使用跨进程文件锁（`_FileLock`），避免同一缓存键的并发构建；缓存按模型、SM 架构、批次大小、输入尺寸与精度区分，命中后直接反序列化加载。不同 SM 架构分别构建引擎。
    - 通过 `context.execute_async_v3(stream_handle)` 直接绑定显存张量指针异步执行，实现零额外显存拷贝。
 2. **后备后端 —— TorchInductor `channels_last` (`NHWC`) + `PLKConv2d` 非原地融合补丁**：
    - 标准 `PLKConv2d` 层使用原地切片赋值（`x[:, :self.idx] = self.conv(x[:, :self.idx])`），这会打断 `torch.compile` 图捕获并强制退回 NCHW 内存布局。
@@ -167,9 +178,9 @@ flowchart LR
 3. **显存内抗锯齿下采样与 GPU CAS 锐化**：
    - 经 `4x` 超分放大后的张量（`3416×1920`）全程驻留显存，直接在 VRAM 内通过抗锯齿双三次插值（`F.interpolate(..., antialias=True)`）下采样至 `1920×1080`，随后经纯 PyTorch 实现的 5 抽头 GPU **自适应对比度锐化（`gpu_cas_sharpen`）** 增强微边缘，最后量化为连续 `uint8` 字节流。
 
-### 6.3 零拷贝锁页内存环形缓冲（Pinned Ring）与异步 DMA 流水线
+### 6.3 锁页内存环形缓冲（Pinned Ring）与异步 DMA 流水线
 
-为彻底消除批次之间的 CPU-GPU 同步等待停顿，`process_segment_stream` 构建了基于 4 槽位锁页内存环形缓冲（`in_ring` 与 `out_ring`）的三级异步流水线：
+为减少批次之间的 CPU-GPU 同步等待，`process_segment_stream` 构建了基于 4 槽位锁页内存环形缓冲（`in_ring` 与 `out_ring`）的三级流水线。这里的“零拷贝读取”仅指减少 Python 中间 `bytes` 对象；H2D 与 D2H 仍执行 DMA 数据传输，不表示端到端零拷贝或 GPUDirect：
 
 ```mermaid
 sequenceDiagram
@@ -188,4 +199,4 @@ sequenceDiagram
 
 1. **零拷贝管道读取（`_readinto_full`）**：读取线程直接通过 `memoryview` 将 FFmpeg 解码器输出的裸 `rgb24` 字节流写入预分配的 `pin_memory` 张量槽位，消除了 Python `bytes` 中间对象的内存分配与拷贝。
 2. **基于 `torch.cuda.Event` 的异步 D2H DMA**：GPU 完成当前批次超分后，以 `non_blocking=True` 异步拷贝至 `out_ring` 并打上 `cuda.Event` 硬件事件戳，主推理线程立即无缝处理下一批次；写入线程仅在对应的 `cuda_ev.synchronize()` 触发后将 `memoryview` 刷入 `hevc_nvenc`。
-3. **BT.709 色彩空间与帧数完整性强校验**：编码阶段强制写入标准高清 `BT.709` 色彩矩阵与传输特性（`out_color_matrix=bt709:out_range=tv`），并在切片落盘前核对解码与编码总帧数，确保成片零丢帧、零偏色。
+3. **BT.709 色彩标记与处理帧数合理性检查**：编码阶段设置 `BT.709` 色彩矩阵与传输特性（`out_color_matrix=bt709:out_range=tv`）。分段完成时检查解码器、编码器退出码，并将处理帧数与时长推算值比较，容差为 `max(4 帧, 预计帧数的 5%)`；当前检查不包含重新探测编码帧数或逐帧内容验证。

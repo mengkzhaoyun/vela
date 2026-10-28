@@ -13,7 +13,7 @@
 - [合成采样实验脚本](../scripts/diagnose_resampling_order.py)：无需模型和 GPU 的局部机制验证。
 - [采样实验数据](assets/restoration-order/sampling-results.json)：已执行实验的完整数字、环境与限制。
 - [正式研究计划](plan/2026.10.restoration-order.plan.md)：任务、依赖与验收检查点。
-- [组件性能测试执行指南](component-benchmark-guide.md)：可人工运行的性能工具、结果汇总与交付限制；不替代端到端画质实验。
+- [运行日志说明](runtime-log-review.md)：Jasna 与 Vela 独立运行的日志组织方式，不另设组件 benchmark。
 
 以上源码依据按两个仓库同级检出的布局链接。实现会演进，端到端实验须记录实际代码版本、未提交补丁与权重指纹，不能只以模型名称追溯。
 

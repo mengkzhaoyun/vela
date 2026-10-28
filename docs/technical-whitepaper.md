@@ -1,189 +1,190 @@
-# Vela Technical Whitepaper: Multi-GPU Streaming Architecture for Real-World Video Super-Resolution
+# Vela 技术白皮书：面向真实世界视频超分的多 GPU 流式引擎架构
 
-- **References**:
-  - [Project Overview and Quick Start](../README.md): Core capabilities, CLI usage, and container deployment for the Vela engine.
-  - [Multi-GPU Work-Stealing Scheduler](../vela/pipeline/scheduler.py): Process-isolated GOP scheduling and lossless stream remuxing implementation.
-  - [Zero-Copy Async DMA Streaming Worker](../vela/pipeline/worker.py): Ring-buffered pinned-memory pipe between FFmpeg and CUDA streams.
-  - [TensorRT FP16 Execution Engine](../vela/models/trt_engine.py): Automated ONNX graph export, cross-process build locking, and async TensorRT execution.
-  - [Spandrel PLKSR Upscaler and VRAM Post-Processor](../vela/models/upscaler.py): `PLKConv2d` NHWC graph fusion, antialiased downscaling, and GPU Contrast Adaptive Sharpening.
-  - [PLKSR Paper (arXiv:2405.11845)](https://arxiv.org/abs/2405.11845): *Partial Large Kernel CNNs for Efficient Super-Resolution* (Lee et al., 2024).
-  - [Community 11-Method Video Upscaling Benchmark](https://www.reddit.com/r/StableDiffusion/comments/1xha6jy/ive_tested_11_video_upscaling_methods/): Empirical evaluation of open-source diffusion workflows, commercial desktop suites, and perceptual CNN upscalers.
+- **当前依据**：
+  - [项目概览与快速开始](../README.md)：Vela 引擎的核心特性、CLI 命令行用法与容器化部署说明。
+  - [英文版技术白皮书 (English Version)](technical-whitepaper.en.md)：本文档的英文对照版本。
+  - [多 GPU 工作窃取调度器](../vela/pipeline/scheduler.py)：多进程隔离的 GOP 动态调度与无损音视频流重封装实现。
+  - [零拷贝异步 DMA 流式工作器](../vela/pipeline/worker.py)：FFmpeg 管道与 CUDA 流之间的锁页内存环形缓冲（Pinned Memory Ring）实现。
+  - [TensorRT FP16 推理引擎](../vela/models/trt_engine.py)：自动 ONNX 图导出、跨进程构建文件锁与异步 TensorRT 执行器。
+  - [Spandrel PLKSR 超分器与显存后处理](../vela/models/upscaler.py)：`PLKConv2d` NHWC 图融合、显存内抗锯齿下采样与 GPU 自适应对比度锐化（CAS）。
+  - [PLKSR 论文 (arXiv:2405.11845)](https://arxiv.org/abs/2405.11845)：*Partial Large Kernel CNNs for Efficient Super-Resolution*（Lee et al., 2024）。
+  - [社区 11 种视频超分方法横评](https://www.reddit.com/r/StableDiffusion/comments/1xha6jy/ive_tested_11_video_upscaling_methods/)：开源扩散工作流、商业桌面软件与感知型 CNN 超分模型的实测对比。
 
-## 1. Executive Summary and Taxonomy of Video Super-Resolution
+## 1. 执行摘要与视频超分（VSR）分类体系
 
-In modern media engineering, the term "Video Upscaling" encompasses fundamentally different mathematical paradigms. Attempting to restore a two-hour, low-bitrate 480p live-action feature film using a multi-step generative diffusion workflow designed for three-second AI clips leads to severe identity drift and intractable compute costs.
+在现代多媒体工程中，“视频超分与放大（Video Upscaling / VSR）”涵盖了底层数学机制截然不同的多种技术范式。如果试图用面向 3 秒 AI 生成短片的多步扩散重绘工作流，去处理长达两小时的低码率 480p 存量实拍长片，不仅会导致严重的人物五官变脸（Identity Drift），还会引发指数级崩溃的算力成本。
 
-**Vela** is purpose-built as a high-throughput, **Multi-GPU Streaming Video Super-Resolution (VSR) Engine** dedicated to **Tier 1 (Fidelity and Restoration VSR)**—restoring legacy 480p, 576p, and 720p live-action archives to crisp 1080p and 4K while preserving 100% of the subject's original facial identity and temporal stability.
+**Vela** 是专为 **T1（忠实逆退化修复超分，Fidelity & Restoration VSR）** 打造的高吞吐、**多 GPU 流式视频超分引擎**，致力于将 480p、576p 与 720p 存量实拍视频无损升级至 1080p 与 4K，在彻底消除压缩伪影的同时，100% 锁定人物原生五官特征与跨帧时序稳定性。
 
-### 1.1 Fundamental Dichotomy: Restoration VSR vs Generative Hallucinatory Upscaling
+### 1.1 核心二元划分：“VSR 存量长片忠实修复” vs “Upscale AI 脑补细节重绘”
 
-1. **Restoration VSR (Fidelity-Preserving Inverse Degradation)**:
-   - **Mathematical Formulation**: Solves the inverse degradation problem $I_{HR} = f^{-1}(I_{LR})$. Legacy live-action recordings captured genuine physical scenes but suffered spatial downsampling, high-frequency truncation, mosquito noise, and `8×8` Discrete Cosine Transform (DCT) macroblocking during low-bitrate H.264/MPEG-4 compression.
-   - **Engineering Objective**: Eliminate compression macroblocks and reconstruct attenuated physical edges **without inventing synthetic facial features**. Preserves 100% of the performer's native identity, eye catchlights, moles, and micro-expressions.
-2. **Generative Upscaling (Hallucinatory Conditional Redrawing)**:
-   - **Mathematical Formulation**: Treats the low-resolution video as a structural conditioning guide and samples new high-frequency details from Gaussian noise via a Diffusion Transformer (DiT).
-   - **Engineering Objective**: Hallucinate synthetic skin pores, fabric weaves, and lighting on short AI-generated clips that lacked fine detail at birth, trading strict pixel fidelity and throughput for generative texture density.
+1. **VSR 存量长片忠实修复（Restoration VSR，逆退化还原）**：
+   - **数学本质**：求解图像退化逆问题 $I_{HR} = f^{-1}(I_{LR})$。存量实拍影视在当年拍摄时本具备真实的物理场景与面部细节，但在早期低码率 H.264/MPEG-4 压制（如 480p `2.1 Mbps`）过程中遭受了空间降采样模糊、高频截断、蚊噪（Mosquito Noise）以及 `8×8` 离散余弦变换（DCT）宏块伪影。
+   - **工程目标**：**“擦掉马赛克宏块、擦亮镜头”**。仅消除压缩块并恢复被削弱的物理边缘，**严禁凭空捏造原片不存在的五官特征**，实现 **0% 变脸（100% 保留演员原生眼神高光、泪痣与微表情）**。
+2. **Upscale AI 脑补细节超分（Generative Upscaling，生成式条件重绘）**：
+   - **数学本质**：将低清视频作为结构条件引导（Conditioning Guide），调用视频扩散变换器（DiT）从高斯噪声中重新采样并合成新的高频细节。
+   - **工程目标**：**“照着低清底片把细节重新画出来”**。专门针对先天缺乏真实毛孔、织物经纬与发丝细节的 AI 生成短片，以牺牲像素忠实度与推理速度为代价，换取生成式纹理密度。
 
-### 1.2 Clarifying Throughput (`fps`) vs Video Frame Interpolation (VFI)
+### 1.2 概念纠偏：“超分处理吞吐率（fps）”与“视频补帧（VFI）”的区别
 
-When evaluating video restoration pipelines, two distinct frame-rate metrics must not be conflated:
+在评估视频修复管线时，必须严格区分以下两个同样以帧率表示、但物理意义完全不同的指标：
 
-- **Processing Throughput (`fps`)**: Measures how many video frames per second the GPU cluster can upscale from 480p to 1080p (e.g., `42.4 fps` across an 8-GPU node). It reflects **compute speed** and does not alter the video's playback timing.
-- **Video Frame Interpolation (VFI)**: Refers to synthesizing intermediate frames between existing frames (e.g., converting `24Hz` playback to `60Hz` via `RIFE`). High-frame-rate legacy recordings (`59.94Hz`) require spatial super-resolution rather than temporal frame synthesis; furthermore, Vela supports exact integer frame decimation (e.g., `59.94Hz -> 29.97Hz`) to halve compute load while preserving rational timebases without judder.
+- **超分处理吞吐率（Processing Throughput，单位 `fps`）**：指 GPU 集群**每秒钟能将多少帧画面从 480p 超分至 1080p**（例如 8 卡节点达到 `42.4 fps`）。它衡量的是**算力渲染速度**，不会改变输出视频本身的播放快慢。
+- **视频补帧（Video Frame Interpolation, VFI）**：指在原本只有 `24Hz / 30Hz` 的相邻帧之间**凭空插值合成中间帧**（如使用 `RIFE` 升格至 `60Hz`）。对于本身已是高帧率（`59.94Hz`）的存量实拍视频，完全不需要做时序补帧；相反，Vela 支持精准的**整数倍帧率抽稀（Integer Frame Decimation，如 `59.94Hz -> 29.97Hz`）**，在严格保持有理数时基（Rational Timebase）、杜绝抽帧卡顿的前提下将算力开销直接减半。
 
-### 1.3 Three-Tier Industry Taxonomy (T1 / T2 / T3)
+### 1.3 行业三级分类体系（T1 / T2 / T3）全景对照
 
 ```mermaid
 flowchart TD
-    A["AI Video Super-Resolution & Upscaling"] --> B{"Restoration Fidelity vs Generative Hallucination"}
-    B -->|"T1: Zero Hallucination / Inverse Degradation"| C["Tier 1: Fidelity Restoration VSR (Vela + RealPLKSR / Topaz Proteus)"]
-    B -->|"T2: Controlled Single-Step Priors"| D["Tier 2: One-Step Temporal DiT VSR (FlashVSR / SeedVR2)"]
-    B -->|"T3: Heavy Multi-Step Redrawing"| E["Tier 3: Multi-Step Latent V2V Upscale (Wan 2.2 V2V / Topaz Starlight)"]
-    C --> C1["0% Identity Drift | Removes H.264 Macroblocks | High Throughput for 1-2h Full Films"]
-    D --> D1["Low Drift | Temporal Attention Detail Injection | Suited for <60s Highlight Clips"]
-    E --> E1["High Identity Drift | 20-40 min per 5s Clip | Restricted to 3-5s AI Clips"]
+    A["AI 视频超分与放大 (AI Video Upscaling / VSR)"] --> B{"技术路线：忠实逆退化 vs 生成式脑补"}
+    B -->|"T1：零脑补、逆退化忠实修复"| C["T1：存量实拍长片修复 (Vela + RealPLKSR / Topaz Proteus)"]
+    B -->|"T2：受控单步扩散先验"| D["T2：一步/少步时序扩散超分 (阿里 FlashVSR / 字节 SeedVR2)"]
+    B -->|"T3：重度多步潜空间重绘"| E["T3：多步潜空间重绘放大 (Wan 2.2 V2V / Topaz Starlight)"]
+    C --> C1["0% 变脸 | 彻底消除 H.264 宏块 | 高吞吐支撑 1~2 小时全片"]
+    D --> D1["极低漂移 | 跨帧时序注意力补充发丝/皮肤光泽 | 适合 60 秒内精华片段"]
+    E --> E1["高变脸风险 | 5 秒片段耗时 20~40 分钟 | 仅限 3~5 秒 AI 短片冲 4K"]
 ```
 
-| Tier Classification and Scope                         | Representative Models, Characteristics, and Runtime Boundaries                                                                                       |
-| :---------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Tier 1: Fidelity Restoration VSR**                  | Open-source **`RealPLKSR`**, `ClearRealityV1`, commercial `Topaz Proteus/Iris`; **0% identity drift**, removes compression blocks, scales to 2-hour films |
-| **Tier 2: One-Step Temporal Generative VSR**          | **`FlashVSR`** (Alibaba), **`SeedVR2`** (ByteDance); distilled 1-to-4 step DiT models injecting fine hair/skin texture on `<60s` highlight sequences |
-| **Tier 3: Multi-Step Hallucinatory V2V Upscaling**    | **`Wan 2.2 V2V Upscale`**, `Qwen Tiled`, `Topaz Starlight`; 20-30 step latent redrawing that alters facial micro-features and takes ~40 min per short clip |
+| 梯队分级与适用范畴                                | 代表技术方案、核心特征与时长边界                                                                                                                         |
+| :------------------------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **T1：存量长片忠实修复（Restoration VSR）**       | 开源 **`RealPLKSR`**、`ClearRealityV1`、商业 `Topaz Proteus/Iris`；**0% 变脸**，专注消除压缩块与还原真实边缘，支撑 **1~2 小时存量实拍长片**               |
+| **T2：一步时序生成式超分（One-Step DiT VSR）**    | 阿里 **`FlashVSR`**、字节 **`SeedVR2`**；经蒸馏的 1~4 步时序扩散模型，在锁定五官结构的前提下适度补充发丝与微纹理，适合 **60 秒以内高能精华片段**         |
+| **T3：多步潜空间重绘放大（Hallucinatory V2V）**   | **`Wan 2.2 V2V Upscale`**、`Qwen Tiled`、`Topaz Starlight`；20~30 步分块潜空间重绘，极易篡改面部微特征且单短片耗时约 40 分钟，仅限 **3~5 秒 AI 短片** |
 
-## 2. Tier 1 Deep Dive: Open-Source RealPLKSR vs Commercial Suites
+## 2. T1 深度剖析：开源 RealPLKSR 对决商业软件 Topaz Video AI
 
-For full-length live-action archives (e.g., 90 to 150 minutes, 200,000 to 500,000 frames at 480p), **Tier 1** is the only viable production paradigm. Within Tier 1, the 2024 open-source **`RealPLKSR`** architecture has surpassed both legacy GAN upscalers (`Real-ESRGAN`) and commercial desktop software (`Topaz Video AI`).
+面对 90 至 150 分钟（20 万至 50 万帧）的 480p 存量实拍长片，**T1** 是唯一具备工业可行性的技术范式。在 T1 赛道中，2024 年下半年成熟的开源 **`RealPLKSR`** 架构已在肤质自然度与多卡集群扩展能力上全面超越传统 GAN 模型（`Real-ESRGAN`）与商业桌面标杆（`Topaz Video AI`）。
 
-### 2.1 Architectural Breakthrough of RealPLKSR (2024)
+### 2.1 2024 开源破局者：`RealPLKSR + DySample` 架构原理
 
-1. **Origins and Evolution (May – October 2024)**:
-   - In May 2024, Lee et al. introduced **PLKSR** (*Partial Large Kernel CNNs for Efficient Super-Resolution*, `arXiv:2405.11845`), demonstrating that applying large convolutional kernels to a partial subset of feature channels achieves transformer-grade receptive fields at a fraction of the compute cost.
-   - Between May and October 2024, the open-source **`neosr`** framework (`muslll`) adapted PLKSR for real-world degradation restoration (**`RealPLKSR`**) and paired it with **`DySample`** (an ICCV 2023 content-aware dynamic point-sampling upsampler), leading to production weights such as `4xNomosWebPhoto_RealPLKSR` and `4x_RealPLKSR_dysample`.
-2. **Why `17×17` Partial Large Kernels Defeat H.264 Macroblocks**:
-   - Legacy CNN/GAN upscalers (`Real-ESRGAN`) stack narrow `3×3` kernels whose local receptive field is smaller than an `8×8` or `16×16` H.264 DCT macroblock. Consequently, `3×3` networks frequently mistake block boundaries for genuine object edges, amplifying compression noise into a harsh grid.
-   - `RealPLKSR` utilizes **`17×17` large-kernel convolutions** across split channels. A single layer spans across entire H.264 macroblocks, allowing the network to separate periodic compression artifacts from genuine eyelashes, hair strands, and skin highlights.
-   - Replacing `PixelShuffle` with **`DySample`** eliminates sub-pixel checkerboard artifacts on smooth skin tones and out-of-focus backgrounds.
+1. **学术起源与开源演进（2024 年 5 月 ~ 10 月）**：
+   - **2024 年 5 月**：Lee 等人发表 **PLKSR** 论文（*Partial Large Kernel CNNs for Efficient Super-Resolution*, `arXiv:2405.11845`），证明无需引入高开销的 Transformer 自注意力机制，仅对部分特征通道施加超大卷积核即可获得媲美 Transformer 的大感受野。
+   - **2024 年 5 月 ~ 10 月**：开源框架 **`neosr`**（`muslll`）将 PLKSR 拓展至真实世界退化修复领域（**`RealPLKSR`**），并融合 ICCV 2023 提出的动态点采样上采样器 **`DySample`**，相继孵化出 `4xNomosWebPhoto_RealPLKSR` 与 `4x_RealPLKSR_dysample` 等工业级开源权重。
+2. **为什么 `17×17` 部分大卷积核能精准克制 H.264 宏块？**
+   - 早期 CNN/GAN 超分器（如 `Real-ESRGAN`）堆叠狭窄的 `3×3` 卷积核，其局部感受野比 H.264 的 `8×8` 或 `16×16` DCT 压缩宏块还要小，极易将宏块的方块边界误判为真实物体边缘并加以锐化，导致画面出现刺眼的网格噪点。
+   - `RealPLKSR` 在分流通道上直接采用 **`17×17` 超大卷积核**，单层感受野即可完整跨越整个 H.264 压缩宏块，使网络能够从宏观上下文直接甄别“周期性压缩伪影”与“真实眼睫毛/发丝/高光”。
+   - 用 **`DySample`**（内容感知动态坐标点采样）替代传统的 `PixelShuffle`（子像素卷积），彻底根除了平滑肌肤与暗部散景上的亚像素棋盘格伪影（Checkerboard Artifacts）。
 
-### 2.2 Comparative Analysis: Vela (RealPLKSR) vs Topaz Video AI
+### 2.2 核心能力对决：`Vela (RealPLKSR)` vs `Topaz Video AI`
 
-| Evaluation Dimension                    | Open-Source `Vela + RealPLKSR` vs Commercial `Topaz Video AI (Proteus / Iris)`                                                                       |
-| :-------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Skin Texture and Facial Realism**     | **`RealPLKSR` Advantage**: `Topaz Iris/Proteus` frequently induces an artificial "plastic/waxy doll" look on low-bitrate faces; `RealPLKSR` preserves organic skin grain |
-| **Macroblock & Mosquito Noise Removal** | **`RealPLKSR` Advantage**: `17×17` receptive fields and modern OTF degradation training suppress `2 Mbps` H.264 blockiness cleanly without smearing hair |
-| **Headless Multi-GPU Cluster Scaling**  | **`Vela` Advantage**: Topaz is bound to single-node desktop GUIs; Vela scales linearly across 8-GPU headless Linux servers via GOP work-stealing     |
-| **Inference Speed & Licensing Cost**    | **`Vela` Advantage**: TensorRT FP16 + NHWC fusion delivers superior per-GPU throughput at zero licensing cost (MIT License vs \$299+ commercial seats) |
+| 评估维度                       | 开源 `Vela + RealPLKSR` 对决商业桌面软件 `Topaz Video AI (Proteus / Iris)`                                                                           |
+| :----------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **真人肤质与五官自然度**       | **`RealPLKSR` 胜出**：`Topaz Iris/Proteus` 处理低码率人脸时极易产生“蜡像馆塑料磨皮感（Plastic/Waxy Look）”与白边过冲；`RealPLKSR` 保留真实胶片肤质   |
+| **去宏块与抗蚊噪能力**         | **`RealPLKSR` 胜出**：依靠 `17×17` 大感受野与现代动态退化训练，对 `2 Mbps` 低码率 H.264 块效应的抚平比 `Topaz Proteus` 更干净且不涂抹发丝细节        |
+| **无头 Linux 多卡集群扩展**    | **`Vela` 完胜**：Topaz 受限于 Windows/macOS 单机桌面 GUI；Vela 原生支持无头 Linux 服务器，通过 GOP 工作窃取在 8 卡集群上实现线性加速                 |
+| **推理吞吐率与许可证成本**     | **`Vela` 完胜**：TensorRT FP16 + NHWC 算子融合带来极高单卡吞吐，且采用 MIT 开源协议零授权成本（对比 Topaz 299 美元以上的商业授权）                   |
 
-### 2.3 Quantitative Benchmark on Legacy 480p Live-Action Footage
+### 2.3 低码率 480p 存量实拍视频量化实测基准
 
-Evaluated on a representative 6-scene live-action benchmark (`854×480 @ 59.94fps`, `2.13 Mbps` H.264, upscaled to `1920×1080`), Tier 1 models demonstrate substantial high-frequency recovery:
+在包含 6 个复杂实拍场景的基准测试集（源视频为 `854×480 @ 59.94fps`，`2.13 Mbps` H.264，超分至 `1920×1080`）上，T1 模型的高频细节恢复表现如下：
 
-| Evaluated Pipeline                              | Laplacian Sharpness Variance and Visual Assessment                                                                               |
-| :---------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------- |
-| **Source Baseline (480p Bicubic to 1080p)**     | Variance `63.67`; severe `8×8` H.264 macroblocking, jagged diagonal edges, and chroma banding in dark regions                    |
-| **Tier 1 Primary: `RealPLKSR` (`4x -> 1080p`)** | Variance **`98.08` (`+54.0%` gain)**; complete elimination of macroblock grids, natural skin highlights, and crisp hair strands  |
-| **Tier 1 Alternative: `ClearRealityV1`**        | Variance `95.21` (`+49.5%` gain); high edge acuity, though slightly less aggressive than `RealPLKSR` at suppressing mosquito noise |
+| 评测管线与模型                                | 拉普拉斯高频清晰度方差与主观画质评估                                                                             |
+| :-------------------------------------------- | :--------------------------------------------------------------------------------------------------------------- |
+| **源视频基准（480p 双三次插值至 1080p）**     | 清晰度方差 `63.67`；存在明显的 `8×8` H.264 宏块网格、斜线锯齿与暗部色带                                          |
+| **T1 主力：`RealPLKSR`（`4x -> 1080p`）**     | 清晰度方差 **`98.08`（提升 `+54.0%`）**；彻底消除宏块网格，人物皮肤高光通透，发丝与睫毛边缘锐利自然              |
+| **T1 备选：`ClearRealityV1`（`4x -> 1080p`）**| 清晰度方差 `95.21`（提升 `+49.5%`）；轮廓锐度极高，但对暗部低码率压缩蚊噪的抑制略逊于 `RealPLKSR`                |
 
-## 3. Tier 2: One-Step Temporal Diffusion VSR (FlashVSR and SeedVR2)
+## 3. T2：一步/少步时序扩散超分（FlashVSR 与 SeedVR2）
 
-When processing curated short-form highlight sequences (`<60 seconds`) rather than full two-hour features, **Tier 2 (One-Step / Few-Step Diffusion Transformers)** bridges the gap between strict inverse restoration (Tier 1) and heavy multi-step redrawing (Tier 3).
+当处理对象从“两小时全片”聚焦到 **60 秒以内的精选高能片段** 时，**T2（一步/少步时序扩散变换器）** 在 T1 的几何忠实度与 T3 的纹理生成力之间提供了理想的折中点。
 
-### 3.1 Mechanism of Distilled One-Step DiT Super-Resolution
+### 3.1 蒸馏一步扩散超分（One-Step DiT）机制
 
-1. **Bypassing High-Noise Destruction**: Unlike Tier 3 workflows that inject heavy Gaussian noise and run 20–30 denoising steps, Tier 2 models use adversarial or consistency distillation to map low-resolution video latents to high-resolution latents in **1 to 4 steps**.
-2. **Temporal Attention**: Cross-frame attention layers aggregate sub-pixel information across adjacent frames, synthesizing fine fabric weaves and specular highlights while keeping facial geometry anchored to the source.
+1. **跨越重度加噪破坏阶段**：不同于 T3 先注入大量高斯噪声再做 20~30 步去噪，T2 模型利用对抗蒸馏（Adversarial Distillation）或一致性蒸馏，仅用 **1 至 4 步** 即可将低清视频潜变量直接映射为高清潜变量，从而保住人物原有五官结构。
+2. **跨帧时序注意力（Temporal Attention）**：通过聚合相邻帧的亚像素位移信息，在保持跨帧平滑的同时合成逼真的织物纹理与发丝光泽。
 
-### 3.2 FlashVSR vs SeedVR2 Characteristics
+### 3.2 `FlashVSR` 与 `SeedVR2` 特性对照
 
-| Tier 2 Model Architecture               | Empirical Performance and Trade-offs                                                                                                 |
-| :-------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
-| **`SeedVR2` (ByteDance, One-Step DiT)** | Aggressive cinematic detail and skin texture reconstruction; demands high VRAM (`24GB+`) and can exhibit subtle texture shimmer in fast motion |
-| **`FlashVSR` (Alibaba, Fast VSR)**      | Prioritizes temporal stability and inference speed; produces natural, flicker-free enhancement at `2-3x` the speed of `SeedVR2`      |
+| T2 模型架构                         | 实测表现与工程权衡                                                                                                       |
+| :---------------------------------- | :----------------------------------------------------------------------------------------------------------------------- |
+| **`SeedVR2`（字节跳动，一步 DiT）** | 电影级光影与皮肤微纹理重构力度极强；但显存开销庞大（需 `24GB+`），且在剧烈运动背景下偶发动态纹理微闪                     |
+| **`FlashVSR`（阿里巴巴，高速 VSR）**| 优先保障时序稳定性与推理速度；细节增强克制自然，几乎零闪烁，推理速度比 `SeedVR2` 快 `2~3 倍`，更契合实拍短片段二次精修   |
 
-## 4. Tier 3: Multi-Step Latent Redrawing (Wan 2.2 V2V and Starlight)
+## 4. T3：多步潜空间重绘脑补（Wan 2.2 V2V 与 Topaz Starlight）
 
-**Tier 3** methods repurpose foundational video generation models (`Wan 2.2 14B`, `Qwen Tiled`, `LTX-2`, or commercial `Topaz Starlight`) as tiled latent re-renderers.
+**T3** 路线将 14B 级视频生成底座（如 `Wan 2.2`、`Qwen Tiled`、`LTX-2` 或商业模型 `Topaz Starlight`）改造为分块潜空间重绘器（Tiled Latent Re-renderer）。
 
-### 4.1 Why Tier 3 Is Unsuitable for Long-Form Live-Action Restoration
+### 4.1 为什么 T3 严禁用于存量实拍长片修复
 
-1. **Identity Drift (Facial Feature Alteration)**:
-   - At denoising strengths required to synthesize new pores (`denoise >= 0.35`), the diffusion prior overwrites subtle performer traits—erasing moles, altering eye shapes, and homogenizing expressions toward synthetic training distributions.
-2. **Prohibitive Compute Cost**:
-   - Community benchmarks confirm that tiled `Wan 2.2` upscaling requires **20 to 40+ minutes to render a single 5-second clip** (`~0.06 fps`). Extrapolated to a 140-minute feature film, a single GPU would require **over 45 days** of continuous rendering. Tier 3 should therefore be restricted strictly to **3-to-5 second AI-generated shorts targeting 4K**.
+1. **身份漂移与五官篡改（Identity Drift）**：
+   - 当去噪强度达到足以生成新毛孔的阈值（`denoise >= 0.35`）时，视频大模型的生成先验会覆盖原片演员的细微面部特征——抹除泪痣、改变眼型与嘴角弧度，将其同质化为训练集的平均模特脸。
+2. **算力与耗时的指数级倒挂**：
+   - 社区基准实测表明，分块 `Wan 2.2` 超分渲染短短 5 秒视频即需耗时 **20 至 40 分钟以上**（约 `0.06 fps`）。若折算至 140 分钟的长片，单卡需连续渲染 **超过 45 天**。因此 T3 仅限于 **3~5 秒原生 AI 生成短片冲刺 4K**。
 
-## 5. Bypass and Legacy Technologies: DLSS, RTX VSR, and Signal Filters
+## 5. 旁路与传统技术：DLSS 边界、RTX 实时超分与信号滤镜
 
-A frequent architectural question is why real-time gaming upscalers (`DLSS / FSR`) or legacy `FFmpeg` filters cannot replace an offline Tier 1 engine like Vela.
+工程实践中常被问及：为何游戏领域的实时超分神技（`DLSS / FSR`）、显卡驱动实时超分（`RTX VSR`）或传统 `FFmpeg` 滤镜不能替代 Vela？
 
-### 5.1 Why NVIDIA DLSS and AMD FSR 2+ Cannot Process Video Files
+### 5.1 为什么 `NVIDIA DLSS` 与 `AMD FSR 2+` 无法处理视频文件
 
-- **Missing 3D Engine Buffers**: `DLSS` (Deep Learning Super Sampling) and `FSR 2/3` are **3D rendering engine plugins**, not standalone video filters. They require per-pixel **3D Depth Buffers (Z-Buffers)**, **Engine Motion Vectors**, and camera jitter matrices exported directly by a game engine's geometry pass.
-- **Flat Compressed Video Pixels**: Standalone `.mkv` and `.mp4` files contain only flattened 2D YUV color planes with zero 3D geometry or engine motion vectors, making `DLSS` physically inapplicable to pre-recorded video files.
+- **物理缺失 3D 引擎缓冲区**：`DLSS` 与 `FSR 2/3` 是 **3D 游戏渲染引擎内部插件**，而非独立视频滤镜。它们必须依赖游戏引擎在几何渲染阶段实时导出的 **3D 深度缓冲（Z-Buffer）**、**逐像素三维物体运动矢量（Engine Motion Vectors）** 与摄像机抖动矩阵。
+- **存量视频仅有二维扁平像素**：封装好的 `.mkv` 与 `.mp4` 视频文件仅包含经过有损压缩的二维 YUV 色彩平面，完全不存在 3D 几何深度与引擎运动矢量，因此 `DLSS` 在物理原理上无法对视频文件生效。
 
-### 5.2 Driver-Level Real-Time Upscaling (`NVIDIA RTX VSR`) vs Offline Vela
+### 5.2 驱动级实时超分（`NVIDIA RTX VSR`）与离线 Vela 的差异
 
-- **Strict Frame-Time Budget**: Browser and player driver hooks (`RTX VSR`, `Anime4K`) must execute within `< 8–16 ms` per frame, restricting them to lightweight networks that smooth edges rather than true large-kernel restoration.
-- **Playback Lock-in vs Universal Delivery**: Driver upscaling consumes `150W–300W` of desktop GPU power on every viewing and cannot benefit mobile devices, smart TVs, or NAS media servers (`Plex / Jellyfin / Emby`). Offline restoration via Vela produces a permanent, universally playable `1080p HEVC` asset.
+- **严苛的帧耗时预算**：播放器与浏览器驱动钩子（`RTX VSR`、`Anime4K`）必须在单帧 `< 8~16 ms` 内完成计算，因此只能运行极度简化的轻量网络，面对低码率 H.264 宏块时仅能做简单平滑锐化，无法实现 `RealPLKSR` 级别的大感受野逆退化重构。
+- **播放端锁死 vs 全平台通用交付**：驱动级实时超分每次观看都会带来 `150W~300W` 的桌面显卡功耗，且无法惠及手机、平板、Apple TV 或家庭 NAS 媒体库（`Plex / Jellyfin / Emby`）。通过 Vela 离线渲染一次，即可产出全终端永久通用的 `1080p HEVC` 标准资产。
 
-### 5.3 Legacy Signal Filters (`FFmpeg hqdn3d + Lanczos + CAS`)
+### 5.3 传统信号滤镜（`FFmpeg hqdn3d + Lanczos + CAS`）
 
-- **Role as a Zero-GPU Fallback**: Pure mathematical filtering (`hqdn3d` spatiotemporal denoise + `Lanczos` interpolation + `CAS` sharpening) improves Laplacian sharpness variance by `+18.7%` at `235–481 fps` on CPU, but cannot reconstruct lost high-frequency edges (`+54.0%` with `RealPLKSR`). It remains useful only for rapid previewing on GPU-less hosts.
+- **无显卡环境的极速兜底**：纯数学滤波（`hqdn3d` 时空降噪 + `Lanczos` 插值 + `CAS` 锐化）可在纯 CPU 上跑出 `235~481 fps` 并提升 `+18.7%` 的边缘对比度，但无法重建丢失的高频发丝（`RealPLKSR` 提升 `+54.0%`），仅适合作为无 GPU 主机上的快速预览旁路。
 
-## 6. Vela Multi-GPU Streaming Engine Architecture
+## 6. Vela 多 GPU 流式超分引擎架构详解
 
-Standard node-based AI frameworks (such as ComfyUI) decode entire video clips into uncompressed `FP32` RAM tensors before inference—consuming **`179.4 GB` of RAM for just 60 seconds of 1080p 60fps video**—or dump hundreds of thousands of intermediate `.png` files to disk. **Vela** eliminates both bottlenecks through a zero-intermediate-frame streaming architecture.
+传统的节点式 AI 工具（如 ComfyUI）在超分视频时，会将整段视频一次性解码为未压缩的 `FP32` 内存张量——**仅 60 秒的 1080p 60fps 视频就会瞬间吞噬 `179.4 GB` 系统内存**——或者在磁盘上读写数十万张临时 `.png` 图片。**Vela** 通过零中间文件、全流式多进程架构彻底消除了上述瓶颈。
 
-### 6.1 Multi-Process GOP Work-Stealing Topology
+### 6.1 多进程隔离的 GOP 工作窃取（Work-Stealing）拓扑
 
 ```mermaid
 flowchart LR
-    A["Input Video (.mkv / .mp4)"] --> B["FFprobe Keyframe & GOP Segmentation"]
-    B --> C["Lock-Free Work-Stealing Queue (mp.Queue)"]
-    C --> D["GPU 0 Isolated Process: FFmpeg Pipe -> Pinned Ring -> TRT FP16 -> NVENC"]
-    C --> E["GPU 1..N Isolated Process: FFmpeg Pipe -> Pinned Ring -> TRT FP16 -> NVENC"]
-    D --> F["Lossless Concat Demuxer + Audio/Chapter Remux + BT.709 Tagging"]
+    A["输入视频 (.mkv / .mp4)"] --> B["FFprobe 关键帧探测与 GOP 切分"]
+    B --> C["无锁工作窃取队列 (mp.Queue)"]
+    C --> D["GPU 0 独立进程：FFmpeg 管道 -> 锁页环形缓冲 -> TRT FP16 -> NVENC"]
+    C --> E["GPU 1..N 独立进程：FFmpeg 管道 -> 锁页环形缓冲 -> TRT FP16 -> NVENC"]
+    D --> F["无损 Concat 拼接 + 原片音轨/章节重封装 + BT.709 色彩标记"]
     E --> F
-    F --> G["Output: 1080p HEVC / H.264 / AV1 Video"]
+    F --> G["输出：1080p HEVC / H.264 / AV1 高清成片"]
 ```
 
-1. **Process-Isolated CUDA Contexts (`mp.get_context("spawn")`)**:
-   - Multi-threaded Python workers suffer from Global Interpreter Lock (GIL) contention and PyTorch CUDA stream serialization when driving 8 GPUs simultaneously. Vela spawns an independent OS process per GPU (`_gpu_worker_process`), binding each worker to its dedicated `cuda:i` device.
-2. **Dynamic Work-Stealing Queue & Crash-Safe Checkpointing**:
-   - Long-form videos are partitioned into keyframe-aligned GOP segments (`SegmentTask`). Workers dynamically pull segments from a shared `mp.Queue`, naturally load-balancing heterogeneous clusters (e.g., mixing `RTX 5090` and `RTX 4090` GPUs).
-   - Each completed segment writes an atomic `.done` marker in `.vela_work/`, enabling instant crash recovery without re-rendering finished segments.
+1. **进程级隔离的 CUDA 上下文（`mp.get_context("spawn")`）**：
+   - 多线程共享 Python 进程在同时驱动 8 张 GPU 时会遭遇严重的全局解释器锁（GIL）争用与 CUDA 流序列化阻塞。Vela 为每张 GPU 派生独立的操作系统子进程（`_gpu_worker_process`），将每个工作进程独占绑定至专属 `cuda:i` 设备。
+2. **动态工作窃取队列与断点续传（Crash-Safe Checkpointing）**：
+   - 长视频按关键帧边界被切分为独立的 GOP 切片任务（`SegmentTask`）。各 GPU 进程从共享 `mp.Queue` 中动态抢占切片，天然支持异构显卡集群（如 `RTX 5090 + RTX 4090` 混插）的动态负载均衡。
+   - 每个切片编码校验通过后在 `.vela_work/` 下原子写入 `.done` 标记，任务中断后重启可秒级跳过已完成的 GOP 切片。
 
-### 6.2 Dual-Backend Neural Acceleration: TensorRT 10.16 FP16 and NHWC Fusion
+### 6.2 双后端神经网络加速：TensorRT 10.16 FP16 与 NHWC 算子融合
 
-Inside each GPU worker, `VelaUpscaler` maximizes TensorCore utilization through two hardware-accelerated execution paths:
+在每个 GPU 工作进程内部，`VelaUpscaler` 提供两套深度优化的硬件加速后端：
 
-1. **Primary Path — Native TensorRT FP16 Engine (`VelaTRTEngine`)**:
-   - Automatically exports the `Spandrel` PyTorch model to ONNX (opset 17) and compiles an SM-specific **TensorRT FP16** serialized engine (`realplksr_sm89_b8_480x854_fp16.engine`) with persistent timing caches.
-   - Uses a cross-process file lock (`_FileLock`) so parallel multi-GPU workers build the engine once and deserialize it concurrently.
-   - Executes inference asynchronously via `context.execute_async_v3(stream_handle)` directly on device pointers.
-2. **Fallback Path — TorchInductor `channels_last` (`NHWC`) + `PLKConv2d` Out-of-Place Patch**:
-   - Standard `PLKConv2d` layers perform in-place channel slice assignment (`x[:, :self.idx] = self.conv(x[:, :self.idx])`), which breaks `torch.compile` graph capture and forces NCHW memory layouts.
-   - Vela dynamically patches `PLKConv2d.forward` into an out-of-place `torch.cat` in `torch.channels_last` (`NHWC`) format, enabling TorchInductor to fuse all 28 `PLKBlock`s onto cuDNN NHWC TensorCore kernels (**`+85%` throughput increase**).
-3. **In-VRAM Antialiased Downscaling and GPU CAS**:
-   - The `4x` super-resolved tensor (`3416×1920`) never leaves VRAM; it is immediately downscaled to `1920×1080` via antialiased bicubic interpolation (`F.interpolate(..., antialias=True)`) and refined by a 5-tap GPU **Contrast Adaptive Sharpening (`gpu_cas_sharpen`)** kernel before uint8 quantization.
+1. **主后端 —— 原生 TensorRT FP16 引擎（`VelaTRTEngine`）**：
+   - 自动将 `Spandrel` 加载的 PyTorch 模型导出为 ONNX（opset 17），并针对当前显卡 SM 架构编译持久化的 **TensorRT FP16** 序列化引擎（如 `realplksr_sm89_b8_480x854_fp16.engine`）与 Timing Cache。
+   - 内置跨进程文件锁（`_FileLock`），确保多 GPU 并发启动时仅由首个进程编译一次引擎，其余进程直接反序列化共享加载。
+   - 通过 `context.execute_async_v3(stream_handle)` 直接绑定显存张量指针异步执行，实现零额外显存拷贝。
+2. **后备后端 —— TorchInductor `channels_last` (`NHWC`) + `PLKConv2d` 非原地融合补丁**：
+   - 标准 `PLKConv2d` 层使用原地切片赋值（`x[:, :self.idx] = self.conv(x[:, :self.idx])`），这会打断 `torch.compile` 图捕获并强制退回 NCHW 内存布局。
+   - Vela 在运行时将 `PLKConv2d.forward` 动态热替换为基于 `torch.channels_last`（`NHWC`）的非原地 `torch.cat`，使 TorchInductor 能够将全部 28 个 `PLKBlock` 完整融合至 cuDNN NHWC TensorCore 路径（**单卡吞吐率提升 `+85%`**）。
+3. **显存内抗锯齿下采样与 GPU CAS 锐化**：
+   - 经 `4x` 超分放大后的张量（`3416×1920`）全程驻留显存，直接在 VRAM 内通过抗锯齿双三次插值（`F.interpolate(..., antialias=True)`）下采样至 `1920×1080`，随后经纯 PyTorch 实现的 5 抽头 GPU **自适应对比度锐化（`gpu_cas_sharpen`）** 增强微边缘，最后量化为连续 `uint8` 字节流。
 
-### 6.3 Zero-Copy Ring-Buffered DMA Pipeline
+### 6.3 零拷贝锁页内存环形缓冲（Pinned Ring）与异步 DMA 流水线
 
-To prevent CPU-GPU synchronization stalls between batches, `process_segment_stream` implements a 3-stage asynchronous pipeline backed by a 4-slot pinned-memory ring buffer (`in_ring` and `out_ring`):
+为彻底消除批次之间的 CPU-GPU 同步等待停顿，`process_segment_stream` 构建了基于 4 槽位锁页内存环形缓冲（`in_ring` 与 `out_ring`）的三级异步流水线：
 
 ```mermaid
 sequenceDiagram
-    participant Dec as FFmpeg Decoder Pipe (Reader Thread)
-    participant PinIn as Pinned Input Ring (4 Slots)
-    participant GPU as CUDA Stream (TRT FP16 + AA Downscale + CAS)
-    participant PinOut as Pinned Output Ring (4 Slots + cuda.Event)
-    participant Enc as FFmpeg NVENC Pipe (Writer Thread)
+    participant Dec as FFmpeg 解码管道 (Reader 线程)
+    participant PinIn as 锁页输入环形缓冲 (4 槽位)
+    participant GPU as CUDA 推理流 (TRT FP16 + 抗锯齿缩放 + CAS)
+    participant PinOut as 锁页输出环形缓冲 (4 槽位 + cuda.Event)
+    participant Enc as FFmpeg NVENC 编码管道 (Writer 线程)
 
-    Dec->>PinIn: Zero-copy readinto(memoryview)
-    PinIn->>GPU: non_blocking H2D DMA copy
-    GPU->>GPU: 4x RealPLKSR + 1080p AA Resize + CAS
-    GPU->>PinOut: non_blocking D2H DMA copy + record(cuda.Event)
-    PinOut->>Enc: cuda.Event.synchronize() + write(memoryview)
+    Dec->>PinIn: 零拷贝 readinto(memoryview) 直接填充锁页内存
+    PinIn->>GPU: non_blocking H2D 异步 DMA 传输
+    GPU->>GPU: 4x RealPLKSR + 1080p 抗锯齿下采样 + GPU CAS
+    GPU->>PinOut: non_blocking D2H 异步 DMA 拷贝 + 记录 cuda.Event
+    PinOut->>Enc: cuda.Event.synchronize() 精准同步 + write(memoryview)
 ```
 
-1. **Zero-Copy Pipe Ingestion (`_readinto_full`)**: The reader thread reads raw `rgb24` bytes from the FFmpeg decoder stdout pipe directly into a `memoryview` wrapping pre-allocated `pin_memory` tensors, eliminating intermediate Python `bytes` allocations.
-2. **Asynchronous D2H DMA with `torch.cuda.Event`**: After GPU inference, the output uint8 tensor is copied asynchronously (`non_blocking=True`) into `out_ring` and tagged with a `torch.cuda.Event`. The GPU thread immediately begins the next batch while the writer thread waits on `cuda_ev.synchronize()` before flushing the `memoryview` to `hevc_nvenc`.
-3. **Color Space & Frame Integrity Enforcement**: The encoder stage enforces `BT.709` color matrix, primaries, and transfer characteristics (`out_color_matrix=bt709:out_range=tv`) and validates decoded-vs-encoded frame counts before atomic segment commit.
+1. **零拷贝管道读取（`_readinto_full`）**：读取线程直接通过 `memoryview` 将 FFmpeg 解码器输出的裸 `rgb24` 字节流写入预分配的 `pin_memory` 张量槽位，消除了 Python `bytes` 中间对象的内存分配与拷贝。
+2. **基于 `torch.cuda.Event` 的异步 D2H DMA**：GPU 完成当前批次超分后，以 `non_blocking=True` 异步拷贝至 `out_ring` 并打上 `cuda.Event` 硬件事件戳，主推理线程立即无缝处理下一批次；写入线程仅在对应的 `cuda_ev.synchronize()` 触发后将 `memoryview` 刷入 `hevc_nvenc`。
+3. **BT.709 色彩空间与帧数完整性强校验**：编码阶段强制写入标准高清 `BT.709` 色彩矩阵与传输特性（`out_color_matrix=bt709:out_range=tv`），并在切片落盘前核对解码与编码总帧数，确保成片零丢帧、零偏色。
